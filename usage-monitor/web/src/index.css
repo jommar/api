@@ -23,3 +23,26 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* The desktop widget sits on the window's native Liquid Glass, so it draws no surface of its own and
+   takes Apple's label colors, following the system appearance the glass follows (not the MUI mode). */
+.glass-widget {
+  --label: rgb(0 0 0 / 0.85);
+  --label-2: rgb(60 60 67 / 0.6);
+  --separator: rgb(60 60 67 / 0.18);
+  color: var(--label);
+  font-family: -apple-system, BlinkMacSystemFont, 'SF Pro Text', 'Segoe UI Variable', 'Segoe UI', system-ui, sans-serif;
+  -webkit-font-smoothing: antialiased;
+}
+@media (prefers-color-scheme: dark) {
+  .glass-widget {
+    --label: rgb(255 255 255 / 0.92);
+    --label-2: rgb(235 235 245 / 0.6);
+    --separator: rgb(235 235 245 / 0.16);
+  }
+}
+.glass-widget .figure {
+  font-family: ui-rounded, 'SF Pro Rounded', -apple-system, system-ui, sans-serif;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}

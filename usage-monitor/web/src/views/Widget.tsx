@@ -1,6 +1,4 @@
 import { useEffect } from 'react';
-import Paper from '@mui/material/Paper';
-import Typography from '@mui/material/Typography';
 import { fetchSessions, fetchSummary } from '../api';
 import { formatCompact, formatExact, formatUsd } from '../format';
 import { usePolling } from '../usePolling';
@@ -14,9 +12,13 @@ function startOfToday(now = Date.now()): number {
 
 function Stat({ label, value, title }: { label: string; value: string; title?: string }) {
   return (
-    <div aria-label={label} title={title} className="flex flex-col">
-      <span className="text-base font-semibold tabular-nums">{value}</span>
-      <span className="text-[0.6875rem] text-fg-muted">{label.replace(' today', '')}</span>
+    <div aria-label={label} title={title} data-tauri-drag-region className="flex flex-col">
+      <span data-tauri-drag-region className="figure text-[1.375rem] leading-7 font-semibold">
+        {value}
+      </span>
+      <span data-tauri-drag-region className="text-[0.6875rem] font-medium text-[var(--label-2)]">
+        {label.replace(' today', '')}
+      </span>
     </div>
   );
 }
@@ -42,29 +44,41 @@ export function Widget() {
   const offline = summary.error !== undefined && summary.data === undefined;
 
   return (
-    <Paper
-      component="section"
+    <section
       aria-label="Usage"
       data-tauri-drag-region
-      className="m-1 flex cursor-move flex-col gap-2 rounded-xl px-3 py-2 select-none"
+      className="glass-widget flex h-screen cursor-default flex-col justify-between px-4 py-3 select-none"
     >
-      <div data-tauri-drag-region className="flex items-center justify-between gap-3">
-        <Typography component="span" className="text-xs font-medium text-fg-muted">
+      <div data-tauri-drag-region className="flex items-center justify-between">
+        <span data-tauri-drag-region className="text-[0.6875rem] font-semibold tracking-wide text-[var(--label-2)] uppercase">
           Today
-        </Typography>
-        {offline && <span className="text-xs text-red-400">API offline</span>}
+        </span>
+        {offline && (
+          <span className="flex items-center gap-1 text-[0.6875rem] font-medium text-[#ff453a]">
+            <span aria-hidden className="size-1.5 rounded-full bg-current" />
+            API offline
+          </span>
+        )}
       </div>
-      <div data-tauri-drag-region className="flex gap-4">
+      <div data-tauri-drag-region className="flex justify-between gap-4">
         <Stat label="Cost today" value={formatUsd(cost)} />
         <Stat label="Tokens today" value={formatCompact(tokens)} title={formatExact(tokens)} />
         <Stat label="Requests today" value={formatCompact(requests)} title={formatExact(requests)} />
       </div>
       {session && (
-        <div aria-label="Latest session" data-tauri-drag-region className="flex justify-between gap-3 text-xs text-fg-muted">
-          <span className="truncate font-mono">{session.models[0] ?? '—'}</span>
-          <span className="tabular-nums">{formatUsd(session.costUsd)}</span>
+        <div
+          aria-label="Latest session"
+          data-tauri-drag-region
+          className="flex justify-between gap-3 border-t border-[var(--separator)] pt-2 text-[0.75rem] text-[var(--label-2)]"
+        >
+          <span data-tauri-drag-region className="truncate">
+            {session.models[0] ?? '—'}
+          </span>
+          <span data-tauri-drag-region className="figure font-medium">
+            {formatUsd(session.costUsd)}
+          </span>
         </div>
       )}
-    </Paper>
+    </section>
   );
 }

@@ -3,12 +3,25 @@
 
 use tauri::menu::{CheckMenuItem, Menu, MenuItem};
 use tauri::tray::TrayIconBuilder;
+use tauri::utils::config::WindowEffectsConfig;
+use tauri::window::{Effect, EffectsBuilder};
 use tauri::{Manager, WebviewUrl, WebviewWindowBuilder};
 use tauri_plugin_autostart::ManagerExt;
 use tauri_plugin_opener::OpenerExt;
 use tauri_plugin_window_state::{AppHandleExt, StateFlags};
 
 const WIDGET: &str = "widget";
+const RADIUS: f64 = 22.0;
+
+/// Liquid Glass on macOS 26+, the HUD material on older macOS, Acrylic on Windows; Linux has no
+/// native material, so there the transparent window shows the page as-is.
+fn glass() -> WindowEffectsConfig {
+    EffectsBuilder::new()
+        .effects([Effect::LiquidGlassRegular, Effect::HudWindow, Effect::Acrylic])
+        .radius(RADIUS)
+        .interactive(true)
+        .build()
+}
 
 /// The API's loopback port; USAGE_MONITOR_PORT overrides it the same way it does for the server.
 fn dashboard_url() -> String {
@@ -30,11 +43,12 @@ fn main() {
             let url = format!("{}#/widget", dashboard_url()).parse().expect("valid dashboard URL");
             WebviewWindowBuilder::new(app, WIDGET, WebviewUrl::External(url))
                 .title("Usage Monitor")
-                .inner_size(280.0, 112.0)
+                .inner_size(300.0, 124.0)
                 .resizable(false)
                 .decorations(false)
                 .transparent(true)
-                .shadow(false)
+                .effects(glass())
+                .shadow(true)
                 .always_on_top(true)
                 .visible_on_all_workspaces(true)
                 .skip_taskbar(true)
