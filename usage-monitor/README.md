@@ -1,7 +1,7 @@
 # usage-monitor API
 
 Local service that stores usage events sent by the `usage-monitor` Claude Code mod
-(`~/.claude/mods/usage-monitor`, see its [README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)) in SQLite and serves a small
+([install it from its README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)) in SQLite and serves a small
 web dashboard. To set it up go to [Prerequisites](#prerequisites) and [Install](#install); when something stays
 quiet, see [Troubleshooting](#troubleshooting).
 
@@ -65,7 +65,7 @@ Unknown `type`, a missing field or a wrong type is invalid. Unknown extra fields
 - **npm**, only to build the dashboard in `web/`.
 - **Linux with a systemd user session** (`systemctl --user status` works), to run it as a service. A user service
   starts at login; to start it at boot with nobody logged in, run `loginctl enable-linger $USER` once.
-- **The mod**, at `~/.claude/mods/usage-monitor` ([its README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)).
+- **The mod**, installed with `/plugin install usage-monitor --marketplace jommar/mods` ([its README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)).
 
 ## Install
 
@@ -123,9 +123,11 @@ and a unit that fails to start takes the running service down. Add them only aft
 ### Turn the mod on
 
 The service alone receives nothing: the mod reports only once it is given the socket, and until then it stays silent.
-In Claude Code open the `/config` menu and set usage-monitor's "API socket" to the **absolute** socket path,
-`/run/user/<uid>/usage-monitor.sock` (`id -u` prints your uid; environment variables such as `$XDG_RUNTIME_DIR` are not
-expanded there). The same setting in `settings.json` is `pluginConfigs["usage-monitor@inline"].options.apiSocket`.
+Give the mod the **absolute** socket path, `/run/user/<uid>/usage-monitor.sock` (`id -u` prints your uid; environment
+variables such as `$XDG_RUNTIME_DIR` are not expanded there). For a mod installed from the marketplace, run
+`/plugin configure usage-monitor@jommar-mods` in Claude Code; it is stored as
+`pluginConfigs["usage-monitor@jommar-mods"].options.apiSocket` in `settings.json`. A mod loaded from a folder
+(`--plugin-dir`) has it in the `/config` menu as "API socket", under the key `usage-monitor@inline`.
 The mod loads the new value when it reloads, so start a new session after changing it.
 
 Check it: send one prompt in that new session, then
