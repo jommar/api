@@ -3,7 +3,8 @@
 Local service that stores usage events sent by the `usage-monitor` Claude Code mod
 ([install it from its README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)) in SQLite and serves a small
 web dashboard. To set it up go to [Prerequisites](#prerequisites) and [Install](#install); when something stays
-quiet, see [Troubleshooting](#troubleshooting).
+quiet, see [Troubleshooting](#troubleshooting). The web dashboard is all you need; the
+[desktop widget](#desktop-widget) is an optional extra.
 
 The mod POSTs events and never reads anything back. The mod's own pane and status
 line keep working with the API off, down or unconfigured.
@@ -62,7 +63,7 @@ Unknown `type`, a missing field or a wrong type is invalid. Unknown extra fields
 
 - **Node.js 24 or later** (`node --version`). It runs the `.ts` files directly and provides `node:sqlite`; the API
   itself has no dependencies.
-- **npm**, only to build the dashboard in `web/`.
+- **npm**, only to build the dashboard in `web/`. The desktop widget (and its Rust/Tauri toolchain) is optional and not needed for anything above.
 - **Linux with a systemd user session** (`systemctl --user status` works), to run it as a service. A user service
   starts at login; to start it at boot with nobody logged in, run `loginctl enable-linger $USER` once.
 - **The mod**, installed with `/plugin install usage-monitor --marketplace jommar/mods` ([its README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)).
@@ -235,7 +236,9 @@ Behaviour the contract leaves open:
   begins that way has no directory (`cwd` is `null`).
 - **Costs are estimates.** The mod computes `costUsd` from list prices; a model it has no price for gets `null`.
 
-## Desktop widget
+## Desktop widget (optional)
+
+The web dashboard is the minimum setup; skip this section unless you want a floating card as well.
 
 `desktop/` is a [Tauri](https://tauri.app) app that floats a small always-on-top card (today's cost, tokens and
 requests, plus the latest session's model and cost) over every window and workspace, without the browser. It
