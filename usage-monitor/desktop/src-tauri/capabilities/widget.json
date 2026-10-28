@@ -1,0 +1,8 @@
+{
+  "$schema": "../gen/schemas/desktop-schema.json",
+  "identifier": "widget",
+  "description": "Lets the remote #/widget page drag its frameless window, and nothing else.",
+  "windows": ["widget"],
+  "remote": { "urls": ["http://127.0.0.1:*/*"] },
+  "permissions": ["core:window:allow-start-dragging"]
+}

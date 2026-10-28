@@ -234,3 +234,23 @@ Behaviour the contract leaves open:
 - **After `/clear`, no session start.** The mod does not send a `session` start for the new session, so a session that
   begins that way has no directory (`cwd` is `null`).
 - **Costs are estimates.** The mod computes `costUsd` from list prices; a model it has no price for gets `null`.
+
+## Desktop widget
+
+`desktop/` is a [Tauri](https://tauri.app) app that floats a small always-on-top card (today's cost, tokens and
+requests, plus the latest session's model and cost) over every window and workspace, without the browser. It
+loads the dashboard's `#/widget` page from `http://127.0.0.1:7842/` (or `USAGE_MONITOR_PORT`), so the API must be
+running and `web/dist/` built. Drag the card to move it (the position is remembered); the tray icon has Show / hide, Reload, Open
+dashboard, Start at login and Quit.
+
+Needs Rust and the [Tauri prerequisites](https://tauri.app/start/prerequisites/) for your OS (on Linux,
+`webkit2gtk-4.1`; the transparent corners need a compositing window manager).
+
+```sh
+cd ~/.claude/api/usage-monitor/desktop
+npm install
+npm run dev     # run it
+npm run build   # installer for this OS under src-tauri/target/release/bundle/ (.app/.dmg, .msi/.exe, .deb/.rpm/.AppImage)
+```
+
+Tauri builds only for the OS it runs on: build the Windows and Linux installers on those systems (or in CI).

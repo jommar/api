@@ -9,6 +9,7 @@ import { hrefs, useRoute } from './route';
 import { SessionDetail } from './views/SessionDetail';
 import { Sessions } from './views/Sessions';
 import { Summary } from './views/Summary';
+import { Widget } from './views/Widget';
 
 export function App() {
   const route = useRoute();
@@ -21,6 +22,9 @@ export function App() {
   useEffect(() => {
     window.scrollTo(0, 0);
   }, [routeKey]);
+
+  // The desktop app's floating window: the card alone, no app bar.
+  if (route.name === 'widget') return <Widget />;
 
   return (
     <>
