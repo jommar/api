@@ -10,6 +10,7 @@ describe('parseRoute', () => {
     ['#/nope', { name: 'sessions' }],
     ['#/summary', { name: 'summary' }],
     ['#/summary/', { name: 'summary' }],
+    ['#/widget', { name: 'widget' }],
     ['#/sessions/abc-123', { name: 'session', id: 'abc-123' }],
     ['#/sessions/abc-123/', { name: 'session', id: 'abc-123' }],
     ['#/sessions/a%2Fb%20c', { name: 'session', id: 'a/b c' }],

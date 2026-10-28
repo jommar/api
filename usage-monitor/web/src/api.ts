@@ -17,6 +17,8 @@ export interface Session extends Totals {
   startedTs: number;
   lastTs: number;
   cwd: string | null;
+  /** The models the session's requests used, most requests first; empty when it made none. */
+  models: string[];
 }
 
 export interface AgentUsage extends Totals {
@@ -35,7 +37,7 @@ export interface ToolCount {
 
 // On the detail route `tools` is the list [{ tool, count }] and there is no numeric `tools`;
 // the session's total tool calls is the sum of the counts.
-export interface SessionDetail extends Omit<Session, 'tools'> {
+export interface SessionDetail extends Omit<Session, 'tools' | 'models'> {
   agents: AgentUsage[];
   tools: ToolCount[];
 }

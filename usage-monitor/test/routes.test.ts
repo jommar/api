@@ -300,11 +300,11 @@ describe('read routes', () => {
       assert.deepEqual(reply.json, [
         // sess-b: one priced request
         { session: 'sess-b', startedTs: DAY2 + 5 * HOUR, lastTs: DAY2 + 5 * HOUR, cwd: null,
-          requests: 1, tools: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, costUsd: 0.125 },
+          requests: 1, tools: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, costUsd: 0.125, models: ['m-big'] },
         // sess-a: 3 requests (100+200+10 in, 50+20+5 out, 1000+2000+100 cache read, 10+0+1 cache write),
-        // 5 tool calls, cost 0.25 + 0.5 with the null-priced request skipped
+        // 5 tool calls, cost 0.25 + 0.5 with the null-priced request skipped; m-big (2 requests) before m-small (1)
         { session: 'sess-a', startedTs: DAY1 + 10 * HOUR, lastTs: DAY2 + HOUR, cwd: '/work/a',
-          requests: 3, tools: 5, input: 310, output: 75, cacheRead: 3100, cacheWrite: 11, costUsd: 0.75 },
+          requests: 3, tools: 5, input: 310, output: 75, cacheRead: 3100, cacheWrite: 11, costUsd: 0.75, models: ['m-big', 'm-small'] },
       ]);
     }));
 
@@ -388,7 +388,7 @@ describe('read routes', () => {
       assert.equal(bySession.unpriced.requests, 2);
       // no usage events at all: zero totals, and no cost to speak of
       assert.deepEqual(bySession.quiet, { session: 'quiet', startedTs: DAY1 + 2 * HOUR, lastTs: DAY1 + 2 * HOUR, cwd: null,
-        requests: 0, tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: null });
+        requests: 0, tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: null, models: [] });
       assert.equal(bySession.free.costUsd, 0); // priced at zero is not unpriced
       assert.equal(bySession.mixed.costUsd, 0.5);
       assert.equal((await service.get('/api/sessions/unpriced')).json.costUsd, null);

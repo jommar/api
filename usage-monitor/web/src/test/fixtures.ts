@@ -15,6 +15,7 @@ export const sessions: Session[] = [
     cacheRead: 167_440_000,
     cacheWrite: 5_336_000,
     costUsd: 48.2,
+    models: ['claude-opus-5-5', 'claude-haiku-5-5'],
   },
   {
     session: 'sess-cheap',
@@ -28,6 +29,7 @@ export const sessions: Session[] = [
     cacheRead: 0,
     cacheWrite: 999_950,
     costUsd: 0.0042,
+    models: ['claude-sonnet-5-5'],
   },
   {
     session: 'sess-unpriced',
@@ -41,6 +43,7 @@ export const sessions: Session[] = [
     cacheRead: 0,
     cacheWrite: 0,
     costUsd: null,
+    models: [],
   },
 ];
 
