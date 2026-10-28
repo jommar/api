@@ -51,7 +51,7 @@ Unknown `type`, a missing field or a wrong type is invalid. Unknown extra fields
 | Route | Answers |
 | --- | --- |
 | `GET /health` | `200 ok` |
-| `GET /api/sessions?limit=50` | `[{ session, startedTs, lastTs, cwd, requests, tools, input, output, cacheRead, cacheWrite, costUsd }]`, ordered by `lastTs` (last activity), newest first, ties by `startedTs`, then `session` (`limit` 1-500, default 50) |
+| `GET /api/sessions?limit=50` | `[{ session, startedTs, lastTs, cwd, requests, tools, input, output, cacheRead, cacheWrite, costUsd, models }]` (`models`: the models its requests used, most requests first), ordered by `lastTs` (last activity), newest first, ties by `startedTs`, then `session` (`limit` 1-500, default 50) |
 | `GET /api/sessions/:id` | the same totals except `tools`, plus `agents: [{ agent, label, model, requests, tools, input, output, cacheRead, cacheWrite, costUsd }]` and `tools: [{ tool, count }]` (here `tools` is the list; the total is the sum of its counts); `404` if unknown |
 | `GET /api/summary?from=<ms>&to=<ms>` | `{ byDay: [{ day, requests, tools, input, output, cacheRead, cacheWrite, costUsd }], byModel: [{ model, requests, input, output, cacheRead, cacheWrite, costUsd }] }`; `day` is a UTC `YYYY-MM-DD`; `from`/`to` optional |
 | `GET /` and any other file of the build | the dashboard, served from `web/dist/` (see Install) |

@@ -87,6 +87,22 @@ describe('Sessions', () => {
     expect(screen.getAllByLabelText('/home/dev/projects/alpha/api/usage-monitor').length).toBeGreaterThan(0);
   });
 
+  it('shows the most-used model, a count of the others, and every model in a tooltip', async () => {
+    stubApi(() => ({ body: sessions }));
+    renderWithTheme(<Sessions />);
+    await screen.findByRole('table');
+    expect(screen.getByRole('columnheader', { name: 'Model' })).toBeInTheDocument();
+
+    const [first, second, third] = bodyRows() as [HTMLElement, HTMLElement, HTMLElement];
+    const models = within(first).getByLabelText('claude-opus-5-5, claude-haiku-5-5');
+    expect(models).toHaveTextContent(/^claude-opus-5-5 \+1$/);
+    expect(within(second).getByLabelText('claude-sonnet-5-5')).toHaveTextContent(/^claude-sonnet-5-5$/);
+    expect(within(third).getByLabelText('Unknown model')).toHaveTextContent(/^—$/);
+
+    fireEvent.mouseOver(models);
+    expect(await screen.findByRole('tooltip')).toHaveTextContent('claude-opus-5-5, claude-haiku-5-5');
+  });
+
   it('labels the cost column as an estimate', async () => {
     stubApi(() => ({ body: sessions }));
     renderWithTheme(<Sessions />);

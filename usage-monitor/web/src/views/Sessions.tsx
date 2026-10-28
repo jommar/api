@@ -45,6 +45,18 @@ function Directory({ cwd, className = '' }: { cwd: string | null; className?: st
   );
 }
 
+function Models({ models }: { models: string[] }) {
+  const [top, ...rest] = models;
+  return (
+    <Tooltip title={models.length > 0 ? models.join(', ') : 'Unknown model'} placement="bottom-start">
+      <span className="block truncate font-mono text-[0.8125rem]">
+        {top ?? '—'}
+        {rest.length > 0 && ` +${rest.length}`}
+      </span>
+    </Tooltip>
+  );
+}
+
 export function Sessions() {
   const { data, error, fetching, loading, retry } = usePolling('sessions', (signal) => fetchSessions(LIMIT, signal));
 
@@ -71,6 +83,7 @@ export function Sessions() {
                   <TableCell>Last activity</TableCell>
                   <TableCell>Session</TableCell>
                   <TableCell className="hidden sm:table-cell">Directory</TableCell>
+                  <TableCell className="hidden lg:table-cell">Model</TableCell>
                   <TableCell align="right">
                     <HeadLabel short="Req." long="Requests" />
                   </TableCell>
@@ -108,6 +121,9 @@ export function Sessions() {
                     </TableCell>
                     <TableCell className="hidden text-fg-muted sm:table-cell">
                       <Directory cwd={s.cwd} className="max-w-[20rem]" />
+                    </TableCell>
+                    <TableCell className="hidden whitespace-nowrap text-fg-muted lg:table-cell">
+                      <Models models={s.models} />
                     </TableCell>
                     <TableCell align="right" title={formatExact(s.requests)}>
                       {formatCompact(s.requests)}

@@ -217,9 +217,9 @@ const JOINED_TOTALS = `
 
 // The sessions to report on come first (`page`), then usage and tool calls are totalled for those sessions only:
 // SQLite does not push a join condition into a GROUP BY subquery, so the filter has to be inside it.
-const sessionsSql = (pageQuery: string, scope: string) => `
+const sessionsSql = (pageQuery: string, scope: string, extra = '') => `
   WITH page AS MATERIALIZED (${pageQuery})
-  SELECT s.id AS session, s.started_ts AS startedTs, s.last_ts AS lastTs, s.cwd AS cwd, ${JOINED_TOTALS}
+  SELECT s.id AS session, s.started_ts AS startedTs, s.last_ts AS lastTs, s.cwd AS cwd, ${JOINED_TOTALS}${extra}
   FROM page s
   LEFT JOIN (SELECT session, ${USAGE_SUMS} FROM usage_event WHERE ${scope} GROUP BY session) u ON u.session = s.id
   LEFT JOIN (SELECT session, count(*) AS tools FROM tool_call WHERE ${scope} GROUP BY session) t ON t.session = s.id
@@ -229,6 +229,10 @@ const sessionsSql = (pageQuery: string, scope: string) => `
 export const SESSION_LIST_SQL = sessionsSql(
   'SELECT id, started_ts, last_ts, cwd FROM session ORDER BY last_ts DESC, started_ts DESC, id LIMIT :limit',
   'session IN (SELECT id FROM page)',
+  // The models a session's requests used, as a JSON array, most requests first.
+  `, (SELECT json_group_array(model) FROM (
+      SELECT model FROM usage_event WHERE session = s.id GROUP BY model ORDER BY count(*) DESC, model
+    )) AS models`,
 );
 export const SESSION_DETAIL_SQL = sessionsSql(
   'SELECT id, started_ts, last_ts, cwd FROM session WHERE id = :session',
@@ -275,7 +279,8 @@ function createReads(db: DatabaseSync) {
     GROUP BY model ORDER BY costUsd DESC, sum(input + output + cache_read + cache_write) DESC, model`);
 
   return {
-    sessions: (limit: number) => listSessions.all({ limit }),
+    sessions: (limit: number) =>
+      listSessions.all({ limit }).map((row) => ({ ...row, models: JSON.parse(row.models as string) as string[] })),
     sessionDetail(session: string) {
       const row = getSession.get({ session });
       if (!row) return null;
