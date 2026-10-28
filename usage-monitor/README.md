@@ -70,8 +70,9 @@ Unknown `type`, a missing field or a wrong type is invalid. Unknown extra fields
 ## Install
 
 The unit expects the code at `~/.claude/api/usage-monitor` (its `ExecStart` uses `%h/.claude/api/usage-monitor`).
-This folder has no git remote yet, so put it there by copying it; if it lives somewhere else, change that path in
-`deploy/usage-monitor.service` as well. Then, from that folder:
+Clone this repository into `~/.claude/api` to put it there (`git clone https://github.com/jommar/api ~/.claude/api`);
+if it lives somewhere else, change that path in `deploy/usage-monitor.service` as well. Then, from the `usage-monitor`
+folder:
 
 1. **Build the dashboard.** It is a separate app in `web/` (its own `package.json`); the API serves its build output
    from `web/dist/`. Without a build, `GET /` answers with a short "Dashboard not built yet" page and the rest of
