@@ -1,0 +1,35 @@
+import type { ReactElement } from 'react';
+import { ThemeProvider } from '@mui/material/styles';
+import { render } from '@testing-library/react';
+import { vi } from 'vitest';
+import { theme } from '../theme';
+
+export function renderWithTheme(ui: ReactElement) {
+  return render(
+    <ThemeProvider theme={theme} defaultMode="dark" noSsr>
+      {ui}
+    </ThemeProvider>,
+  );
+}
+
+export interface FakeReply {
+  status?: number;
+  body?: unknown;
+}
+
+/**
+ * Replaces `fetch` with a handler that answers by URL. Throwing from the handler (or returning
+ * `'network-error'`) makes the request fail the way an unreachable API does.
+ */
+export function stubApi(handler: (url: string) => FakeReply | 'network-error') {
+  const fetchMock = vi.fn(async (input: RequestInfo | URL) => {
+    const reply = handler(String(input));
+    if (reply === 'network-error') throw new TypeError('Failed to fetch');
+    const status = reply.status ?? 200;
+    return { ok: status >= 200 && status < 300, status, json: async () => reply.body } as Response;
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  return fetchMock;
+}
+
+export const calledUrls = (fetchMock: ReturnType<typeof stubApi>) => fetchMock.mock.calls.map(([url]) => String(url));

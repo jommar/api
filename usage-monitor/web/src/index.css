@@ -1,0 +1,25 @@
+@layer theme, base, mui, components, utilities;
+@import 'tailwindcss';
+
+/* Material UI's palette, exposed to Tailwind as utilities (text-fg-muted, bg-accent-fill, ...). */
+@theme inline {
+  --color-fg-muted: var(--mui-palette-text-secondary);
+  --color-line: var(--mui-palette-divider);
+  --color-panel-2: var(--mui-palette-panel2);
+  --color-accent: var(--mui-palette-primary-main);
+  --color-accent-fill: var(--mui-palette-accentFill);
+}
+
+@theme {
+  --font-mono: ui-monospace, 'SF Mono', 'Cascadia Mono', 'DejaVu Sans Mono', Menlo, Consolas, 'Liberation Mono', monospace;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
+}

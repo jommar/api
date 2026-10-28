@@ -1,0 +1,113 @@
+import type { Session, SessionDetail, Summary } from '../api';
+
+export const T0 = Date.UTC(2026, 9, 28, 17, 44); // Oct 28 2026 17:44 UTC
+
+export const sessions: Session[] = [
+  {
+    session: 'sess-newest',
+    startedTs: T0 - 3_600_000,
+    lastTs: T0,
+    cwd: '/home/dev/projects/alpha/api/usage-monitor',
+    requests: 1840,
+    tools: 1288,
+    input: 570_400,
+    output: 1_665_200,
+    cacheRead: 167_440_000,
+    cacheWrite: 5_336_000,
+    costUsd: 48.2,
+  },
+  {
+    session: 'sess-cheap',
+    startedTs: T0 - 90_000_000,
+    lastTs: T0 - 86_400_000,
+    cwd: '/tmp/scratch',
+    requests: 12,
+    tools: 7,
+    input: 950,
+    output: 4_100,
+    cacheRead: 0,
+    cacheWrite: 999_950,
+    costUsd: 0.0042,
+  },
+  {
+    session: 'sess-unpriced',
+    startedTs: T0 - 200_000_000,
+    lastTs: T0 - 172_800_000,
+    cwd: null,
+    requests: 3,
+    tools: 0,
+    input: 100,
+    output: 50,
+    cacheRead: 0,
+    cacheWrite: 0,
+    costUsd: null,
+  },
+];
+
+export const sessionDetail: SessionDetail = {
+  session: 'sess-newest',
+  startedTs: T0 - 3_600_000,
+  lastTs: T0,
+  cwd: '/home/dev/projects/alpha/api/usage-monitor',
+  requests: 1840,
+  input: 570_400,
+  output: 1_665_200,
+  cacheRead: 167_440_000,
+  cacheWrite: 5_336_000,
+  costUsd: 48.2,
+  agents: [
+    {
+      agent: 'agent-cheap',
+      label: 'review-backend',
+      model: 'claude-sonnet-4-6',
+      requests: 276,
+      tools: 193,
+      input: 85_600,
+      output: 250_000,
+      cacheRead: 25_100_000,
+      cacheWrite: 800_000,
+      costUsd: 4.34,
+    },
+    {
+      agent: 'main',
+      label: '',
+      model: 'claude-opus-4-7',
+      requests: 644,
+      tools: 451,
+      input: 200_000,
+      output: 583_000,
+      cacheRead: 58_600_000,
+      cacheWrite: 1_900_000,
+      costUsd: 27.96,
+    },
+    {
+      agent: 'agent-unpriced',
+      label: 'Explore: find usages',
+      model: '',
+      requests: 5,
+      tools: 2,
+      input: 10,
+      output: 20,
+      cacheRead: 0,
+      cacheWrite: 0,
+      costUsd: null,
+    },
+  ],
+  tools: [
+    { tool: 'Read', count: 50 },
+    { tool: 'Bash', count: 100 },
+    { tool: 'mcp__playwright__browser_navigate', count: 2 },
+  ],
+};
+
+export const summary: Summary = {
+  byDay: [
+    { day: '2026-10-26', requests: 100, tools: 70, input: 40_000, output: 120_000, cacheRead: 9_000_000, cacheWrite: 300_000, costUsd: 2.5 },
+    { day: '2026-10-28', requests: 200, tools: 140, input: 80_000, output: 240_000, cacheRead: 18_000_000, cacheWrite: 600_000, costUsd: 7.5 },
+  ],
+  byModel: [
+    { model: 'claude-haiku-4-5', requests: 60, input: 10_000, output: 30_000, cacheRead: 2_000_000, cacheWrite: 100_000, costUsd: 1 },
+    { model: 'claude-opus-4-7', requests: 200, input: 90_000, output: 270_000, cacheRead: 20_000_000, cacheWrite: 700_000, costUsd: 8 },
+    { model: 'claude-unpriced', requests: 40, input: 20_000, output: 60_000, cacheRead: 5_000_000, cacheWrite: 100_000, costUsd: null },
+  ],
+};

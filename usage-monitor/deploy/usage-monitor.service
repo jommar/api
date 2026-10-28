@@ -1,0 +1,16 @@
+[Unit]
+Description=usage-monitor API: Claude Code usage events in SQLite, plus the dashboard
+
+[Service]
+ExecStart=/home/jommar/.nvm/versions/node/v25.8.0/bin/node %h/.claude/api/usage-monitor/src/server.ts
+Environment=USAGE_MONITOR_SOCKET=%t/usage-monitor.sock
+Environment=USAGE_MONITOR_PORT=7842
+Restart=on-failure
+RestartSec=2
+UMask=0077
+NoNewPrivileges=yes
+LockPersonality=yes
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=default.target
