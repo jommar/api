@@ -1,7 +1,7 @@
 # usage-monitor API
 
 Local service that stores usage events sent by the `usage-monitor` Claude Code mod
-(`~/.claude/mods/usage-monitor`, see its [README](../../mods/usage-monitor/README.md)) in SQLite and serves a small
+(`~/.claude/mods/usage-monitor`, see its [README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)) in SQLite and serves a small
 web dashboard. To set it up go to [Prerequisites](#prerequisites) and [Install](#install); when something stays
 quiet, see [Troubleshooting](#troubleshooting).
 
@@ -65,7 +65,7 @@ Unknown `type`, a missing field or a wrong type is invalid. Unknown extra fields
 - **npm**, only to build the dashboard in `web/`.
 - **Linux with a systemd user session** (`systemctl --user status` works), to run it as a service. A user service
   starts at login; to start it at boot with nobody logged in, run `loginctl enable-linger $USER` once.
-- **The mod**, at `~/.claude/mods/usage-monitor` ([its README](../../mods/usage-monitor/README.md)).
+- **The mod**, at `~/.claude/mods/usage-monitor` ([its README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)).
 
 ## Install
 
