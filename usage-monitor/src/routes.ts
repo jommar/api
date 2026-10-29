@@ -225,14 +225,37 @@ const sessionsSql = (pageQuery: string, scope: string, extra = '') => `
   LEFT JOIN (SELECT session, count(*) AS tools FROM tool_call WHERE ${scope} GROUP BY session) t ON t.session = s.id
   ORDER BY s.last_ts DESC, s.started_ts DESC, s.id`;
 
+// A session's agents, main first and then by id; `session` is the SQL for the session id, `totals` the columns of the
+// LEFT JOINed usage subquery `u` and tool subquery `t` to add to `agent`, `label` and `model`.
+// An agent can show up in usage or tool events without ever having an `agent` event, so the keys are a union.
+const agentsSql = (session: string, totals: string) => `
+  SELECT k.agent AS agent, coalesce(a.label, '') AS label, coalesce(a.model, '') AS model, ${totals}
+  FROM (
+    SELECT agent FROM agent WHERE session = ${session}
+    UNION SELECT agent FROM usage_event WHERE session = ${session}
+    UNION SELECT agent FROM tool_call WHERE session = ${session}
+  ) k
+  LEFT JOIN agent a ON a.session = ${session} AND a.agent = k.agent
+  LEFT JOIN (SELECT agent, ${USAGE_SUMS} FROM usage_event WHERE session = ${session} GROUP BY agent) u ON u.agent = k.agent
+  LEFT JOIN (SELECT agent, count(*) AS tools FROM tool_call WHERE session = ${session} GROUP BY agent) t ON t.agent = k.agent
+  ORDER BY k.agent <> 'main', k.agent`;
+
 // Last activity first, then the later start, then the id.
 export const SESSION_LIST_SQL = sessionsSql(
   'SELECT id, started_ts, last_ts, cwd FROM session ORDER BY last_ts DESC, started_ts DESC, id LIMIT :limit',
   'session IN (SELECT id FROM page)',
-  // The models a session's requests used, as a JSON array, most requests first.
+  // As JSON arrays: the models a session's requests used, most requests first, its tool calls per tool, most calls first,
+  // and its agents as the detail lists them, trimmed to what the dashboard shows. SQLite writes a REAL with 15 digits in JSON,
+  // so the cost goes in as its 17-digit text, which parses back to the exact sum.
   `, (SELECT json_group_array(model) FROM (
       SELECT model FROM usage_event WHERE session = s.id GROUP BY model ORDER BY count(*) DESC, model
-    )) AS models`,
+    )) AS models,
+    (SELECT json_group_array(json_object('tool', tool, 'count', count)) FROM (
+      SELECT tool, count(*) AS count FROM tool_call WHERE session = s.id GROUP BY tool ORDER BY count DESC, tool
+    )) AS toolCounts,
+    (SELECT json_group_array(json_object('agent', agent, 'label', label, 'model', model,
+      'costUsd', CASE WHEN costUsd IS NULL THEN NULL ELSE json(printf('%!.17g', costUsd)) END
+    )) FROM (${agentsSql('s.id', 'u.costUsd AS costUsd')})) AS agents`,
 );
 export const SESSION_DETAIL_SQL = sessionsSql(
   'SELECT id, started_ts, last_ts, cwd FROM session WHERE id = :session',
@@ -243,18 +266,7 @@ function createReads(db: DatabaseSync) {
   const listSessions = db.prepare(SESSION_LIST_SQL);
   const getSession = db.prepare(SESSION_DETAIL_SQL);
 
-  // An agent can show up in usage or tool events without ever having an `agent` event, so the keys are a union.
-  const listAgents = db.prepare(`
-    SELECT k.agent AS agent, coalesce(a.label, '') AS label, coalesce(a.model, '') AS model, ${JOINED_TOTALS}
-    FROM (
-      SELECT agent FROM agent WHERE session = :session
-      UNION SELECT agent FROM usage_event WHERE session = :session
-      UNION SELECT agent FROM tool_call WHERE session = :session
-    ) k
-    LEFT JOIN agent a ON a.session = :session AND a.agent = k.agent
-    LEFT JOIN (SELECT agent, ${USAGE_SUMS} FROM usage_event WHERE session = :session GROUP BY agent) u ON u.agent = k.agent
-    LEFT JOIN (SELECT agent, count(*) AS tools FROM tool_call WHERE session = :session GROUP BY agent) t ON t.agent = k.agent
-    ORDER BY k.agent <> 'main', k.agent`);
+  const listAgents = db.prepare(agentsSql(':session', JOINED_TOTALS));
 
   const listTools = db.prepare(`
     SELECT tool, count(*) AS count FROM tool_call WHERE session = :session
@@ -280,7 +292,12 @@ function createReads(db: DatabaseSync) {
 
   return {
     sessions: (limit: number) =>
-      listSessions.all({ limit }).map((row) => ({ ...row, models: JSON.parse(row.models as string) as string[] })),
+      listSessions.all({ limit }).map((row) => ({
+        ...row,
+        models: JSON.parse(row.models as string) as string[],
+        toolCounts: JSON.parse(row.toolCounts as string) as { tool: string; count: number }[],
+        agents: JSON.parse(row.agents as string) as { agent: string; label: string; model: string; costUsd: number | null }[],
+      })),
     sessionDetail(session: string) {
       const row = getSession.get({ session });
       if (!row) return null;

@@ -1,7 +1,7 @@
 import type { ReactElement } from 'react';
 import { ThemeProvider } from '@mui/material/styles';
 import { render } from '@testing-library/react';
-import { vi } from 'vitest';
+import { onTestFinished, vi } from 'vitest';
 import { theme } from '../theme';
 
 export function renderWithTheme(ui: ReactElement) {
@@ -30,6 +30,14 @@ export function stubApi(handler: (url: string) => FakeReply | 'network-error') {
   });
   vi.stubGlobal('fetch', fetchMock);
   return fetchMock;
+}
+
+/** jsdom has no clipboard: gives the test a `writeText` spy, removed again when the test ends. */
+export function stubClipboard(writeText: (text: string) => Promise<void> = async () => {}) {
+  const spy = vi.fn(writeText);
+  Object.defineProperty(navigator, 'clipboard', { value: { writeText: spy }, configurable: true });
+  onTestFinished(() => void Reflect.deleteProperty(navigator, 'clipboard'));
+  return spy;
 }
 
 export const calledUrls = (fetchMock: ReturnType<typeof stubApi>) => fetchMock.mock.calls.map(([url]) => String(url));

@@ -4,7 +4,7 @@ Local service that stores usage events sent by the `usage-monitor` Claude Code m
 ([install it from its README](https://github.com/jommar/mods/blob/master/usage-monitor/README.md)) in SQLite and serves a small
 web dashboard. To set it up go to [Prerequisites](#prerequisites) and [Install](#install); when something stays
 quiet, see [Troubleshooting](#troubleshooting). The web dashboard is all you need; the
-[desktop widget](#desktop-widget) is an optional extra.
+[desktop widget](#desktop-widget-optional) is an optional extra.
 
 The mod POSTs events and never reads anything back. The mod's own pane and status
 line keep working with the API off, down or unconfigured.
@@ -52,7 +52,7 @@ Unknown `type`, a missing field or a wrong type is invalid. Unknown extra fields
 | Route | Answers |
 | --- | --- |
 | `GET /health` | `200 ok` |
-| `GET /api/sessions?limit=50` | `[{ session, startedTs, lastTs, cwd, requests, tools, input, output, cacheRead, cacheWrite, costUsd, models }]` (`models`: the models its requests used, most requests first), ordered by `lastTs` (last activity), newest first, ties by `startedTs`, then `session` (`limit` 1-500, default 50) |
+| `GET /api/sessions?limit=50` | `[{ session, startedTs, lastTs, cwd, requests, tools, input, output, cacheRead, cacheWrite, costUsd, models, toolCounts, agents }]` (`models`: the models its requests used, most requests first; `toolCounts: [{ tool, count }]`: its tool calls per tool, agents together, most calls first then by `tool`, `[]` when it has none; `tools` is their sum; `agents: [{ agent, label, model, costUsd }]`: the detail's `agents` limited to those four fields, in the same order, `[]` when it has none), ordered by `lastTs` (last activity), newest first, ties by `startedTs`, then `session` (`limit` 1-500, default 50) |
 | `GET /api/sessions/:id` | the same totals except `tools`, plus `agents: [{ agent, label, model, requests, tools, input, output, cacheRead, cacheWrite, costUsd }]` and `tools: [{ tool, count }]` (here `tools` is the list; the total is the sum of its counts); `404` if unknown |
 | `GET /api/summary?from=<ms>&to=<ms>` | `{ byDay: [{ day, requests, tools, input, output, cacheRead, cacheWrite, costUsd }], byModel: [{ model, requests, input, output, cacheRead, cacheWrite, costUsd }] }`; `day` is a UTC `YYYY-MM-DD`; `from`/`to` optional |
 | `GET /` and any other file of the build | the dashboard, served from `web/dist/` (see Install) |
@@ -211,7 +211,7 @@ web/                the dashboard app (not part of the API); web/dist/ is what g
 Behaviour the contract leaves open:
 
 - Sessions are ordered by `lastTs` (last activity), newest first, ties by `startedTs` (later start first) and then by
-  `session`. The list picks its `limit` sessions first and totals usage and tool calls for those only, so the work
+  `session`. The list picks its `limit` sessions first and totals usage and tool calls (`tools`, `toolCounts` and `agents`) for those only, so the work
   follows the page, not the whole history of events. `limit` outside 1-500, and a `from`/`to` that is not an integer (a negative one
   included), answer `400`. `from` and `to` are inclusive.
 - `session` and `agent` events keep no row of their own, so their ids are stored in `state_event`; that is
