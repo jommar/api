@@ -300,11 +300,18 @@ describe('read routes', () => {
       assert.deepEqual(reply.json, [
         // sess-b: one priced request
         { session: 'sess-b', startedTs: DAY2 + 5 * HOUR, lastTs: DAY2 + 5 * HOUR, cwd: null,
-          requests: 1, tools: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, costUsd: 0.125, models: ['m-big'] },
+          requests: 1, tools: 1, input: 1, output: 1, cacheRead: 0, cacheWrite: 0, costUsd: 0.125, models: ['m-big'],
+          toolCounts: [{ tool: 'Edit', count: 1 }], agents: [{ agent: 'main', label: '', model: 'm-big', costUsd: 0.125 }] },
         // sess-a: 3 requests (100+200+10 in, 50+20+5 out, 1000+2000+100 cache read, 10+0+1 cache write),
-        // 5 tool calls, cost 0.25 + 0.5 with the null-priced request skipped; m-big (2 requests) before m-small (1)
+        // 5 tool calls (Bash 2, Read 1 + 1 from the subagent, Edit 1), cost 0.25 + 0.5 with the null-priced request skipped;
+        // m-big (2 requests) before m-small (1); main first, then the labelled subagent, whose only request is unpriced
         { session: 'sess-a', startedTs: DAY1 + 10 * HOUR, lastTs: DAY2 + HOUR, cwd: '/work/a',
-          requests: 3, tools: 5, input: 310, output: 75, cacheRead: 3100, cacheWrite: 11, costUsd: 0.75, models: ['m-big', 'm-small'] },
+          requests: 3, tools: 5, input: 310, output: 75, cacheRead: 3100, cacheWrite: 11, costUsd: 0.75, models: ['m-big', 'm-small'],
+          toolCounts: [{ tool: 'Bash', count: 2 }, { tool: 'Read', count: 2 }, { tool: 'Edit', count: 1 }],
+          agents: [
+            { agent: 'main', label: '', model: 'm-big', costUsd: 0.75 },
+            { agent: 'sub-1', label: 'explore', model: 'm-small', costUsd: null },
+          ] },
       ]);
     }));
 
@@ -356,6 +363,123 @@ describe('read routes', () => {
       }
     }));
 
+  test('GET /api/sessions lists toolCounts per tool: most calls first, then by name, all agents together; [] with no tool calls', () =>
+    withService(async (service) => {
+      await service.post([
+        // Edit 1 + 2 and Read 2 + 1 tie at 3 (Edit first, by name); Grep has 2; Alpha and Zed tie at 1 (Alpha first), behind Grep although "Alpha" sorts before it
+        tool('busy', 'main', 'Edit', DAY1), tool('busy', 'sub-1', 'Edit', DAY1 + 1), tool('busy', 'sub-1', 'Edit', DAY1 + 2),
+        tool('busy', 'main', 'Read', DAY1 + 3), tool('busy', 'main', 'Read', DAY1 + 4), tool('busy', 'sub-1', 'Read', DAY1 + 5),
+        tool('busy', 'main', 'Grep', DAY1 + 6), tool('busy', 'main', 'Grep', DAY1 + 7),
+        tool('busy', 'main', 'Zed', DAY1 + 8), tool('busy', 'main', 'Alpha', DAY1 + 9),
+        usage('no-calls', 'main', 'm', DAY1, [1, 1, 1, 1], 1),
+      ]);
+      const list = (await service.get('/api/sessions')).json;
+      const bySession = Object.fromEntries(list.map((row: Raw) => [row.session, row]));
+      assert.deepEqual(bySession.busy.toolCounts, [
+        { tool: 'Edit', count: 3 }, { tool: 'Read', count: 3 }, { tool: 'Grep', count: 2 }, { tool: 'Alpha', count: 1 }, { tool: 'Zed', count: 1 },
+      ]);
+      assert.deepEqual(bySession['no-calls'].toolCounts, []);
+      assert.equal(bySession['no-calls'].requests, 1);
+      for (const row of list) {
+        assert.equal(row.toolCounts.reduce((sum: number, entry: { count: number }) => sum + entry.count, 0), row.tools, row.session);
+      }
+    }));
+
+  test('GET /api/sessions: toolCounts is what the session detail gives as tools, and the detail has no toolCounts', () =>
+    withService(async (service) => {
+      await service.post(fixtureEvents());
+      for (const row of (await service.get('/api/sessions')).json) {
+        const detail = (await service.get(`/api/sessions/${row.session}`)).json;
+        assert.deepEqual(detail.tools, row.toolCounts, row.session);
+        assert.equal(Object.hasOwn(detail, 'toolCounts'), false, row.session);
+      }
+    }));
+
+  test('GET /api/sessions: a session outside the limit page does not change the tool counts of the ones shown', () =>
+    withService(async (service) => {
+      await service.post([usage('recent', 'main', 'm', DAY2, [1, 1, 1, 1], 1), tool('recent', 'main', 'Bash', DAY2)]);
+      const before = (await service.get('/api/sessions?limit=1')).json;
+      await service.post([
+        usage('older', 'main', 'm', DAY1, [1, 1, 1, 1], 1),
+        tool('older', 'main', 'Bash', DAY1), tool('older', 'main', 'Bash', DAY1 + 1), tool('older', 'main', 'Bash', DAY1 + 2),
+        tool('older', 'main', 'Grep', DAY1 + 3),
+      ]);
+      const page = (await service.get('/api/sessions?limit=1')).json;
+      assert.deepEqual(page.map((row: Raw) => row.session), ['recent']);
+      assert.deepEqual(page[0].toolCounts, [{ tool: 'Bash', count: 1 }]);
+      assert.deepEqual(page, before);
+    }));
+
+  test('GET /api/sessions lists agents: main first, then by id, each with its own label, model and cost; [] with none', () =>
+    withService(async (service) => {
+      await service.post([
+        usage('team', 'main', 'm-big', DAY1, [1, 1, 1, 1], 0.25),
+        agentEvent('team', 'sub-b', DAY1 + 1, 'review', 'm-small'),
+        usage('team', 'sub-b', 'm-small', DAY1 + 2, [1, 1, 1, 1], 0.0625),
+        usage('team', 'sub-b', 'm-small', DAY1 + 3, [1, 1, 1, 1], 0.0625),
+        agentEvent('team', 'sub-a', DAY1 + 4, 'plan', 'm-mid'),
+        usage('team', 'sub-a', 'm-mid', DAY1 + 5, [1, 1, 1, 1], 0.5),
+        usage('team', 'sub-a', 'm-mid', DAY1 + 6, [1, 1, 1, 1], null), // an unpriced request does not null the sum
+        usage('team', 'free', 'm-free', DAY1 + 7, [1, 1, 1, 1], null), // no agent event, and no request with a price
+        tool('team', 'alpha', 'Bash', DAY1 + 8), // sorts before "main" but not first; only ever made a tool call
+        sessionEvent('alone', DAY1 + 9, 'start'),
+      ]);
+      const list = (await service.get('/api/sessions')).json;
+      const bySession = Object.fromEntries(list.map((row: Raw) => [row.session, row]));
+      assert.deepEqual(bySession.team.agents, [
+        { agent: 'main', label: '', model: 'm-big', costUsd: 0.25 },
+        { agent: 'alpha', label: '', model: '', costUsd: null },
+        { agent: 'free', label: '', model: 'm-free', costUsd: null },
+        { agent: 'sub-a', label: 'plan', model: 'm-mid', costUsd: 0.5 },
+        { agent: 'sub-b', label: 'review', model: 'm-small', costUsd: 0.125 },
+      ]);
+      assert.deepEqual(bySession.alone.agents, []);
+    }));
+
+  test('GET /api/sessions: agents is the session detail agents trimmed to agent, label, model and costUsd, the cost to the last digit', () =>
+    withService(async (service) => {
+      await service.post([
+        ...fixtureEvents(),
+        // sums a JSON number cannot carry with SQLite's 15 digits
+        usage('floaty', 'main', 'm', DAY2 + 6 * HOUR, [1, 1, 1, 1], 0.1),
+        usage('floaty', 'main', 'm', DAY2 + 6 * HOUR + 1, [1, 1, 1, 1], 0.2),
+        agentEvent('floaty', 'sub-1', DAY2 + 6 * HOUR + 2, 'tiny', 'm'),
+        usage('floaty', 'sub-1', 'm', DAY2 + 6 * HOUR + 3, [1, 1, 1, 1], 0.0000001),
+        usage('floaty', 'sub-1', 'm', DAY2 + 6 * HOUR + 4, [1, 1, 1, 1], 1 / 3),
+        usage('floaty', 'sub-1', 'm', DAY2 + 6 * HOUR + 5, [1, 1, 1, 1], 1 / 7),
+        sessionEvent('quiet', DAY1, 'start'),
+      ]);
+      const list = (await service.get('/api/sessions')).json;
+      assert.deepEqual(list.map((row: Raw) => row.session), ['floaty', 'sess-b', 'sess-a', 'quiet']);
+      for (const row of list) {
+        const detail = (await service.get(`/api/sessions/${row.session}`)).json;
+        const projected = detail.agents.map(({ agent, label, model, costUsd }: Raw) => ({ agent, label, model, costUsd }));
+        assert.deepEqual(row.agents, projected, row.session);
+        // the detail itself still gives every field of every agent
+        for (const agent of detail.agents) {
+          assert.deepEqual(Object.keys(agent), ['agent', 'label', 'model', 'requests', 'tools', 'input', 'output', 'cacheRead', 'cacheWrite', 'costUsd']);
+        }
+      }
+      const floaty = list[0].agents.map((agent: Raw) => agent.costUsd as number);
+      assert.ok(floaty.every((cost: number) => Number(cost.toPrecision(15)) !== cost), `costs with more than 15 digits: ${floaty}`);
+    }));
+
+  test('GET /api/sessions: a session outside the limit page does not change the agents of the ones shown', () =>
+    withService(async (service) => {
+      await service.post([usage('recent', 'main', 'm-new', DAY2, [1, 1, 1, 1], 1)]);
+      const before = (await service.get('/api/sessions?limit=1')).json;
+      await service.post([
+        // the same agent ids as the shown session, with other models, labels and costs
+        usage('older', 'main', 'm-old', DAY1, [1, 1, 1, 1], 5),
+        agentEvent('older', 'sub-1', DAY1 + 1, 'explore', 'm-sub'),
+        usage('older', 'sub-1', 'm-sub', DAY1 + 2, [1, 1, 1, 1], 7),
+      ]);
+      const page = (await service.get('/api/sessions?limit=1')).json;
+      assert.deepEqual(page.map((row: Raw) => row.session), ['recent']);
+      assert.deepEqual(page[0].agents, [{ agent: 'main', label: '', model: 'm-new', costUsd: 1 }]);
+      assert.deepEqual(page, before);
+    }));
+
   test('the sessions list and the session detail read only the sessions they report on, never a whole table', () =>
     withService(async (service) => {
       await service.post(fixtureEvents());
@@ -388,7 +512,7 @@ describe('read routes', () => {
       assert.equal(bySession.unpriced.requests, 2);
       // no usage events at all: zero totals, and no cost to speak of
       assert.deepEqual(bySession.quiet, { session: 'quiet', startedTs: DAY1 + 2 * HOUR, lastTs: DAY1 + 2 * HOUR, cwd: null,
-        requests: 0, tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: null, models: [] });
+        requests: 0, tools: 0, input: 0, output: 0, cacheRead: 0, cacheWrite: 0, costUsd: null, models: [], toolCounts: [], agents: [] });
       assert.equal(bySession.free.costUsd, 0); // priced at zero is not unpriced
       assert.equal(bySession.mixed.costUsd, 0.5);
       assert.equal((await service.get('/api/sessions/unpriced')).json.costUsd, null);

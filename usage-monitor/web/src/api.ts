@@ -19,6 +19,10 @@ export interface Session extends Totals {
   cwd: string | null;
   /** The models the session's requests used, most requests first; empty when it made none. */
   models: string[];
+  /** The session's tool calls per tool, most calls first then by tool name; empty when it made none. `tools` is their sum. */
+  toolCounts: ToolCount[];
+  /** The session's agents, "main" first, then the rest by id; empty when it has no usage. */
+  agents: SessionAgent[];
 }
 
 export interface AgentUsage extends Totals {
@@ -30,6 +34,9 @@ export interface AgentUsage extends Totals {
   model: string;
 }
 
+/** What the list says of each agent, for the Model tooltip; `costUsd` is null when none of its events was priced. */
+export type SessionAgent = Pick<AgentUsage, 'agent' | 'label' | 'model' | 'costUsd'>;
+
 export interface ToolCount {
   tool: string;
   count: number;
@@ -37,7 +44,7 @@ export interface ToolCount {
 
 // On the detail route `tools` is the list [{ tool, count }] and there is no numeric `tools`;
 // the session's total tool calls is the sum of the counts.
-export interface SessionDetail extends Omit<Session, 'tools' | 'models'> {
+export interface SessionDetail extends Omit<Session, 'tools' | 'models' | 'toolCounts' | 'agents'> {
   agents: AgentUsage[];
   tools: ToolCount[];
 }

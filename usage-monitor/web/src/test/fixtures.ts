@@ -16,6 +16,16 @@ export const sessions: Session[] = [
     cacheWrite: 5_336_000,
     costUsd: 48.2,
     models: ['claude-opus-5-5', 'claude-haiku-5-5'],
+    toolCounts: [
+      { tool: 'Bash', count: 600 },
+      { tool: 'Read', count: 400 },
+      { tool: 'Edit', count: 200 },
+      { tool: 'mcp__playwright__browser_evaluate', count: 88 },
+    ],
+    agents: [
+      { agent: 'main', label: '', model: 'claude-opus-5-5', costUsd: 40 },
+      { agent: 'agent-review', label: 'review-backend', model: 'claude-haiku-5-5', costUsd: 8.2 },
+    ],
   },
   {
     session: 'sess-cheap',
@@ -30,6 +40,11 @@ export const sessions: Session[] = [
     cacheWrite: 999_950,
     costUsd: 0.0042,
     models: ['claude-sonnet-5-5'],
+    toolCounts: [
+      { tool: 'Read', count: 4 },
+      { tool: 'Bash', count: 3 },
+    ],
+    agents: [{ agent: 'main', label: '', model: 'claude-sonnet-5-5', costUsd: 0.0042 }],
   },
   {
     session: 'sess-unpriced',
@@ -44,6 +59,8 @@ export const sessions: Session[] = [
     cacheWrite: 0,
     costUsd: null,
     models: [],
+    toolCounts: [],
+    agents: [],
   },
 ];
 
