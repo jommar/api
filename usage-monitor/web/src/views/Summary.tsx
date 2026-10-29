@@ -12,7 +12,8 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup';
 import Typography from '@mui/material/Typography';
 import { useTheme } from '@mui/material/styles';
 import { BarChart } from '@mui/x-charts/BarChart';
-import { fetchSummary, type DayUsage, type Summary as SummaryData } from '../api';
+import { ChartsReferenceLine } from '@mui/x-charts/ChartsReferenceLine';
+import { fetchSettings, fetchSummary, type DayUsage, type Summary as SummaryData } from '../api';
 import { HeadLabel } from '../components/HeadLabel';
 import { EmptyState } from '../components/EmptyState';
 import { ErrorState } from '../components/ErrorState';
@@ -31,11 +32,21 @@ const RANGES: { value: Range; label: string; days?: number }[] = [
 
 const DAY_MS = 86_400_000;
 
-/** From the start of the UTC day `days - 1` days ago (so "7 days" is today plus six) up to now. */
-export function rangeBounds(range: Range, now: number): { from?: number; to?: number } {
+/** Minutes east of UTC on this machine at `ms`; the summary's days are local days. */
+export function tzOffset(ms: number): number {
+  return -new Date(ms).getTimezoneOffset();
+}
+
+/** The `YYYY-MM-DD` of `ms` in a zone `tz` minutes east of UTC. */
+function dayIn(ms: number, tz: number): string {
+  return utcDay(ms + tz * 60_000);
+}
+
+/** From local midnight `days - 1` days ago (so "7 days" is today plus six) up to now. */
+export function rangeBounds(range: Range, now: number, tz = tzOffset(now)): { from?: number; to?: number } {
   const days = RANGES.find((r) => r.value === range)?.days;
   if (days === undefined) return {};
-  return { from: Date.parse(`${utcDay(now - (days - 1) * DAY_MS)}T00:00:00Z`), to: now };
+  return { from: Date.parse(`${dayIn(now - (days - 1) * DAY_MS, tz)}T00:00:00Z`) - tz * 60_000, to: now };
 }
 
 /** One row per day across the span, zeros where nothing was recorded, so the time axis is honest. */
@@ -43,8 +54,9 @@ function withEmptyDays(byDay: DayUsage[], range: Range, now: number): DayUsage[]
   if (byDay.length === 0) return [];
   const sorted = [...byDay].sort((a, b) => a.day.localeCompare(b.day));
   const { from } = rangeBounds(range, now);
-  const first = from === undefined ? sorted[0]!.day : utcDay(from);
-  const last = range === 'all' ? sorted[sorted.length - 1]!.day : utcDay(now);
+  const tz = tzOffset(now);
+  const first = from === undefined ? sorted[0]!.day : dayIn(from, tz);
+  const last = range === 'all' ? sorted[sorted.length - 1]!.day : dayIn(now, tz);
   const known = new Map(sorted.map((d) => [d.day, d]));
   return eachDay(first, last).map(
     (day) =>
@@ -52,7 +64,7 @@ function withEmptyDays(byDay: DayUsage[], range: Range, now: number): DayUsage[]
   );
 }
 
-const DAY_TABLE_CAPTION = 'Usage per UTC day';
+const DAY_TABLE_CAPTION = 'Usage per day';
 
 interface ChartCardProps {
   title: string;
@@ -65,8 +77,9 @@ interface ChartCardProps {
 function ChartCard({ title, note, legend, children }: ChartCardProps) {
   return (
     <Paper className="p-4">
-      <div className="flex items-start justify-between gap-3">
-        <div>
+      {/* The legend wraps under the title when both do not fit, instead of squeezing it. */}
+      <div className="flex flex-wrap items-start justify-between gap-x-3 gap-y-2">
+        <div className="min-w-[12rem] flex-1">
           <Typography variant="h2" component="h2">
             {title}
           </Typography>
@@ -75,9 +88,9 @@ function ChartCard({ title, note, legend, children }: ChartCardProps) {
           </Typography>
         </div>
         {legend && (
-          <ul className="m-0 flex shrink-0 list-none gap-3 p-0 text-xs whitespace-nowrap text-fg-muted">
+          <ul className="m-0 flex list-none flex-wrap gap-x-3 gap-y-1 p-0 text-xs text-fg-muted">
             {legend.map((item) => (
-              <li key={item.label} className="flex items-center gap-1.5">
+              <li key={item.label} className="flex items-center gap-1.5 whitespace-nowrap">
                 <span aria-hidden className="size-2.5 rounded-xs" style={{ background: item.color }} />
                 {item.label}
               </li>
@@ -101,6 +114,7 @@ const chartSx = {
 
 /** The charts' values as text, for screen readers; the charts themselves only show them on hover. */
 function DayTable({ days }: { days: DayUsage[] }) {
+  const today = dayIn(Date.now(), tzOffset(Date.now()));
   return (
     <div className="sr-only">
       <table>
@@ -111,15 +125,22 @@ function DayTable({ days }: { days: DayUsage[] }) {
             <th scope="col">Est. cost</th>
             <th scope="col">New in</th>
             <th scope="col">Out</th>
+            <th scope="col">Cache write</th>
+            <th scope="col">Cache read</th>
           </tr>
         </thead>
         <tbody>
           {days.map((d) => (
             <tr key={d.day}>
-              <th scope="row">{formatDay(d.day)}</th>
+              <th scope="row">
+                {formatDay(d.day)}
+                {d.day === today && ' (today)'}
+              </th>
               <td>{formatUsd(d.costUsd)}</td>
               <td>{formatExact(d.input)}</td>
               <td>{formatExact(d.output)}</td>
+              <td>{formatExact(d.cacheWrite)}</td>
+              <td>{formatExact(d.cacheRead)}</td>
             </tr>
           ))}
         </tbody>
@@ -128,19 +149,24 @@ function DayTable({ days }: { days: DayUsage[] }) {
   );
 }
 
-function DayCharts({ days }: { days: DayUsage[] }) {
+function DayCharts({ days, budget }: { days: DayUsage[]; budget: number | null }) {
   const theme = useTheme();
   const palette = theme.vars?.palette ?? theme.palette;
   const accent = palette.accentFill;
   const support = palette.secondary.main;
+  // Cache traffic is the bulk of the tokens but the cheap part: it stays quiet beside new input and output.
+  const cacheWrite = palette.success.main;
+  const cacheRead = palette.text.disabled;
+  const today = dayIn(Date.now(), tzOffset(Date.now()));
   const axis = [
     {
       scaleType: 'band' as const,
       data: days.map((d) => d.day),
-      valueFormatter: (day: string) => formatDay(day),
+      valueFormatter: (day: string) => (day === today ? 'Today' : formatDay(day)),
       tickLabelStyle: { fontSize: 11 },
-      // Thin the labels out rather than letting 30 of them collide.
-      tickLabelInterval: (_: string, index: number) => days.length <= 10 || index % Math.ceil(days.length / 8) === 0,
+      // Labels that would collide at the chart's actual width are skipped, for 7 days on a phone as for 30 on a desktop.
+      tickLabelInterval: 'auto' as const,
+      tickLabelMinGap: 10,
     },
   ];
   const common = {
@@ -155,7 +181,10 @@ function DayCharts({ days }: { days: DayUsage[] }) {
 
   return (
     <div className="relative grid grid-cols-1 gap-3 lg:grid-cols-2">
-      <ChartCard title="Cost per day" note="Estimated (est.), USD, UTC days">
+      <ChartCard
+        title="Cost per day"
+        note={`Estimated (est.), USD, local days${budget === null ? '' : `; dashed line: ${formatUsd(budget)} daily budget`}`}
+      >
         <BarChart
           {...common}
           series={[
@@ -166,15 +195,28 @@ function DayCharts({ days }: { days: DayUsage[] }) {
               valueFormatter: (v) => formatUsd(v),
             },
           ]}
-          yAxis={[{ valueFormatter: (v: number) => formatUsd(v), width: 64 }]}
-        />
+          // The axis reaches past the budget, so its line stays on the chart on a cheap day.
+          yAxis={[
+            {
+              valueFormatter: (v: number) => formatUsd(v),
+              width: 64,
+              ...(budget === null ? {} : { max: Math.max(budget, ...days.map((d) => d.costUsd ?? 0)) * 1.1 }),
+            },
+          ]}
+        >
+          {budget !== null && (
+            <ChartsReferenceLine y={budget} lineStyle={{ strokeDasharray: '4 4', stroke: palette.warning.main }} />
+          )}
+        </BarChart>
       </ChartCard>
       <ChartCard
         title="Tokens per day"
-        note="New input and output tokens; cache traffic is in the model table"
+        note="Every token type; cache reads are billed at a tenth of the new-input price"
         legend={[
           { label: 'New in', color: accent },
           { label: 'Out', color: support },
+          { label: 'Cache write', color: cacheWrite },
+          { label: 'Cache read', color: cacheRead },
         ]}
       >
         <BarChart
@@ -182,6 +224,20 @@ function DayCharts({ days }: { days: DayUsage[] }) {
           series={[
             { data: days.map((d) => d.input), label: 'New in', stack: 'tokens', color: accent, valueFormatter: (v) => formatExact(v) },
             { data: days.map((d) => d.output), label: 'Out', stack: 'tokens', color: support, valueFormatter: (v) => formatExact(v) },
+            {
+              data: days.map((d) => d.cacheWrite),
+              label: 'Cache write',
+              stack: 'tokens',
+              color: cacheWrite,
+              valueFormatter: (v) => formatExact(v),
+            },
+            {
+              data: days.map((d) => d.cacheRead),
+              label: 'Cache read',
+              stack: 'tokens',
+              color: cacheRead,
+              valueFormatter: (v) => formatExact(v),
+            },
           ]}
           yAxis={[{ valueFormatter: (v: number) => formatCompact(v), width: 48 }]}
         />
@@ -267,14 +323,8 @@ function ModelTable({ byModel, totalCost }: { byModel: SummaryData['byModel']; t
   );
 }
 
-export function Summary() {
-  const [range, setRange] = useState<Range>('7d');
-  const { data, error, fetching, loading, retry } = usePolling(`summary:${range}`, (signal) =>
-    fetchSummary(rangeBounds(range, Date.now()), signal),
-  );
-
-  const empty = data !== undefined && data.byDay.length === 0 && data.byModel.length === 0;
-  const totals = data?.byDay.reduce(
+function totalsOf(summary: SummaryData) {
+  return summary.byDay.reduce(
     (t, d) => ({
       cost: d.costUsd === null ? t.cost : (t.cost ?? 0) + d.costUsd,
       requests: t.requests + d.requests,
@@ -284,7 +334,36 @@ export function Summary() {
     }),
     { cost: null as number | null, requests: 0, tools: 0, input: 0, output: 0 },
   );
+}
+
+export function Summary() {
+  const [range, setRange] = useState<Range>('7d');
+  const { data, error, fetching, loading, retry } = usePolling(`summary:${range}`, (signal) =>
+    fetchSummary({ ...rangeBounds(range, Date.now()), tz: tzOffset(Date.now()) }, signal),
+  );
+
+  const empty = data !== undefined && data.byDay.length === 0 && data.byModel.length === 0;
+  const totals = data && totalsOf(data);
+  const settings = usePolling('summary-settings', (signal) => fetchSettings(signal), 60_000);
+  const budget = typeof settings.data?.dailyBudgetUsd === 'number' ? settings.data.dailyBudgetUsd : null;
   const rangeLabel = RANGES.find((r) => r.value === range)!.label.toLowerCase();
+
+  // The window of the same length just before this one, for the cards' comparisons.
+  const days = RANGES.find((r) => r.value === range)!.days;
+  const prevData = usePolling(`summary-previous:${range}`, (signal) => {
+    if (days === undefined) return Promise.resolve(null);
+    const { from } = rangeBounds(range, Date.now());
+    return fetchSummary({ from: from! - days * DAY_MS, to: from! - 1, tz: tzOffset(Date.now()) }, signal);
+  }).data;
+  const previous = prevData === undefined ? undefined : prevData === null ? null : totalsOf(prevData);
+  const prevLabel = `previous ${days} days`;
+  const compare = (now: number, before: number, format: (n: number) => string): string | undefined => {
+    if (previous === undefined || days === undefined) return undefined;
+    if (previous === null || (previous.requests === 0 && previous.tools === 0 && previous.cost === null)) return `Nothing in ${prevLabel}`;
+    const delta = now - before;
+    if (delta === 0) return `Same as ${prevLabel}`;
+    return `${delta > 0 ? '+' : '−'}${format(Math.abs(delta))} vs ${prevLabel}`;
+  };
 
   return (
     <section className="flex flex-col gap-6" aria-labelledby="summary-title">
@@ -294,7 +373,7 @@ export function Summary() {
             Summary
           </Typography>
           <Typography color="textSecondary" className="mt-1">
-            Usage per UTC day and per model. Costs are estimates (est.).
+            Usage per day and per model. Costs are estimates (est.).
           </Typography>
         </div>
         <ToggleButtonGroup
@@ -305,7 +384,7 @@ export function Summary() {
           onChange={(_, next: Range | null) => next && setRange(next)}
         >
           {RANGES.map((r) => (
-            <ToggleButton key={r.value} value={r.value}>
+            <ToggleButton key={r.value} value={r.value} sx={{ '@media (pointer: coarse)': { minHeight: 44 } }}>
               {r.label}
             </ToggleButton>
           ))}
@@ -336,9 +415,30 @@ export function Summary() {
       {data && !empty && totals && (
         <>
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-            <StatCard lead label="Est. cost" value={formatUsd(totals.cost)} hint={rangeLabel} />
-            <StatCard label="Requests" value={formatCompact(totals.requests)} title={formatExact(totals.requests)} />
-            <StatCard label="Tool calls" value={formatCompact(totals.tools)} title={formatExact(totals.tools)} />
+            <StatCard
+              lead
+              label="Est. cost"
+              value={formatUsd(totals.cost)}
+              hint={
+                range === 'all'
+                  ? totals.cost === null
+                    ? undefined
+                    : `Avg ${formatUsd(totals.cost / withEmptyDays(data.byDay, range, Date.now()).length)} a day`
+                  : compare(totals.cost ?? 0, previous?.cost ?? 0, formatUsd)
+              }
+            />
+            <StatCard
+              label="Requests"
+              value={formatCompact(totals.requests)}
+              title={formatExact(totals.requests)}
+              hint={range === 'all' ? undefined : compare(totals.requests, previous?.requests ?? 0, formatExact)}
+            />
+            <StatCard
+              label="Tool calls"
+              value={formatCompact(totals.tools)}
+              title={formatExact(totals.tools)}
+              hint={range === 'all' ? undefined : compare(totals.tools, previous?.tools ?? 0, formatExact)}
+            />
             <StatCard
               label="New tokens"
               value={formatCompact(totals.input + totals.output)}
@@ -346,7 +446,7 @@ export function Summary() {
               hint={`${formatCompact(totals.input)} in · ${formatCompact(totals.output)} out`}
             />
           </div>
-          <DayCharts days={withEmptyDays(data.byDay, range, Date.now())} />
+          <DayCharts days={withEmptyDays(data.byDay, range, Date.now())} budget={budget} />
           <div className="flex flex-col gap-2">
             <Typography variant="h2" component="h2">
               By model

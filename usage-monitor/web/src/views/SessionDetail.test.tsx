@@ -116,4 +116,38 @@ describe('SessionDetail', () => {
     await screen.findByRole('table', { name: 'Agents' });
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
   });
+
+  it('shows the session\'s tool calls as a timeline, folding repeats into one row with a count', async () => {
+    const call = (ts: number, tool: string, detail: string | null) => ({
+      ts, tool, detail, session: 'sess-newest', agent: 'main', label: '', cwd: '/w',
+    });
+    const fetchMock = stubApi((url) =>
+      url.startsWith('/api/tools')
+        ? { body: { byTool: [], calls: [call(3, 'Read', 'a.ts'), call(2, 'Read', 'a.ts'), call(1, 'Read', 'a.ts'), call(0, 'Bash', 'ls')] } }
+        : { body: sessionDetail },
+    );
+    renderWithTheme(<SessionDetail id="sess-newest" />);
+    const timeline = await screen.findByRole('list', { name: 'Timeline' });
+    await waitFor(() => expect(within(timeline).getAllByRole('listitem')).toHaveLength(2));
+    const [first, second] = within(timeline).getAllByRole('listitem') as [HTMLElement, HTMLElement];
+    expect(first).toHaveTextContent('a.ts');
+    expect(within(first).getByLabelText('Repeated 3 times')).toHaveTextContent('×3');
+    expect(second).toHaveTextContent('ls');
+    expect(calledUrls(fetchMock)).toContain('/api/tools?session=sess-newest&limit=200');
+  });
+
+  it('shows the agent column of the timeline only when more than one agent made calls, and marks calls with no summary', async () => {
+    const call = (ts: number, agent: string, detail: string | null) => ({
+      ts, tool: 'Bash', detail, session: 'sess-newest', agent, label: '', cwd: '/w',
+    });
+    stubApi((url) =>
+      url.startsWith('/api/tools') ? { body: { byTool: [], calls: [call(2, 'main', 'ls'), call(1, 'main', null)] } } : { body: sessionDetail },
+    );
+    renderWithTheme(<SessionDetail id="sess-newest" />);
+    const timeline = await screen.findByRole('list', { name: 'Timeline' });
+    await waitFor(() => expect(within(timeline).getAllByRole('listitem')).toHaveLength(2));
+    expect(within(timeline).queryByText('main')).not.toBeInTheDocument();
+    expect(within(timeline).getByTitle('Recorded before tool summaries were sent')).toBeInTheDocument();
+  });
 });
+

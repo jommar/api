@@ -2,13 +2,15 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import type { IncomingMessage, ServerResponse } from 'node:http';
 import type { DatabaseSync } from 'node:sqlite';
-import { distDir as defaultDistDir } from './config.ts';
+import { dailyBudget, distDir as defaultDistDir } from './config.ts';
 import { inTransaction } from './db.ts';
 import { parseBatch, ValidationError, type MonitorEvent } from './events.ts';
 
 const MAX_BODY_BYTES = 1024 * 1024;
 const DEFAULT_SESSION_LIMIT = 50;
 const MAX_SESSION_LIMIT = 500;
+const DEFAULT_TOOL_LIMIT = 200;
+const MAX_TOOL_LIMIT = 1000;
 
 const IMMUTABLE_CACHE = 'public, max-age=31536000, immutable';
 const NO_STORE = 'no-store';
@@ -44,7 +46,8 @@ const STATIC_PATH = /^(?:\/[A-Za-z0-9_][A-Za-z0-9._-]*)+$/;
 const INGEST_PATH = /^\/events$/;
 
 // readOnly is the TCP listener's handler: GET and HEAD for the read routes and the dashboard, 404 for everything else, ingest included.
-export type HandlerOptions = { distDir?: string; readOnly?: boolean };
+// dailyBudgetUsd defaults to USAGE_MONITOR_DAILY_BUDGET.
+export type HandlerOptions = { distDir?: string; readOnly?: boolean; dailyBudgetUsd?: number | null };
 
 type Context = { req: IncomingMessage; res: ServerResponse; url: URL; params: string[] };
 type RouteHandler = (context: Context) => void | Promise<void>;
@@ -62,6 +65,7 @@ class HttpError extends Error {
 export function createHandler(db: DatabaseSync, options: HandlerOptions = {}) {
   const distDir = options.distDir ?? defaultDistDir;
   const readOnly = options.readOnly ?? false;
+  const dailyBudgetUsd = options.dailyBudgetUsd === undefined ? dailyBudget() : options.dailyBudgetUsd;
   const ingestBatch = createIngest(db);
   const reads = createReads(db);
 
@@ -94,9 +98,26 @@ export function createHandler(db: DatabaseSync, options: HandlerOptions = {}) {
       pattern: /^\/api\/summary$/,
       handlers: {
         GET: ({ res, url }) =>
-          sendJson(res, 200, reads.summary(timeParam(url, 'from', Number.MIN_SAFE_INTEGER), timeParam(url, 'to', Number.MAX_SAFE_INTEGER))),
+          sendJson(res, 200, reads.summary(timeParam(url, 'from', Number.MIN_SAFE_INTEGER), timeParam(url, 'to', Number.MAX_SAFE_INTEGER), tzParam(url))),
       },
     },
+    {
+      pattern: /^\/api\/tools$/,
+      handlers: {
+        GET: ({ res, url }) =>
+          sendJson(
+            res,
+            200,
+            reads.tools(
+              timeParam(url, 'from', Number.MIN_SAFE_INTEGER),
+              timeParam(url, 'to', Number.MAX_SAFE_INTEGER),
+              toolLimit(url),
+              url.searchParams.get('session'),
+            ),
+          ),
+      },
+    },
+    { pattern: /^\/api\/settings$/, handlers: { GET: ({ res }) => sendJson(res, 200, { dailyBudgetUsd }) } },
     { pattern: /^\/$/, handlers: { GET: ({ res }) => serveIndex(res, distDir) } },
   ];
   const routes = readOnly ? allRoutes.filter((route) => route.pattern !== INGEST_PATH) : allRoutes;
@@ -136,8 +157,8 @@ function createIngest(db: DatabaseSync) {
     INSERT OR IGNORE INTO usage_event (event_id, session, agent, ts, model, input, output, cache_read, cache_write, cost_usd)
     VALUES (:id, :session, :agent, :ts, :model, :input, :output, :cacheRead, :cacheWrite, :costUsd)`);
   const insertTool = db.prepare(`
-    INSERT OR IGNORE INTO tool_call (event_id, session, agent, ts, tool)
-    VALUES (:id, :session, :agent, :ts, :tool)`);
+    INSERT OR IGNORE INTO tool_call (event_id, session, agent, ts, tool, detail)
+    VALUES (:id, :session, :agent, :ts, :tool, :detail)`);
   const insertStateEvent = db.prepare('INSERT OR IGNORE INTO state_event (event_id) VALUES (:id)');
   const upsertSession = db.prepare(`
     INSERT INTO session (id, started_ts, last_ts, cwd) VALUES (:session, :ts, :ts, :cwd)
@@ -165,7 +186,7 @@ function createIngest(db: DatabaseSync) {
       }
       case 'tool': {
         const { type, ...columns } = event;
-        return insertTool.run(columns).changes > 0;
+        return insertTool.run({ ...columns, detail: event.detail ?? null }).changes > 0;
       }
       case 'agent':
         if (insertStateEvent.run({ id: event.id }).changes === 0) return false;
@@ -264,10 +285,10 @@ function createReads(db: DatabaseSync) {
     SELECT day, sum(requests) AS requests, sum(tools) AS tools, sum(input) AS input, sum(output) AS output,
            sum(cache_read) AS cacheRead, sum(cache_write) AS cacheWrite, sum(cost_usd) AS costUsd
     FROM (
-      SELECT date(ts / 1000, 'unixepoch') AS day, 1 AS requests, 0 AS tools, input, output, cache_read, cache_write, cost_usd
+      SELECT date(ts / 1000 + :tz * 60, 'unixepoch') AS day, 1 AS requests, 0 AS tools, input, output, cache_read, cache_write, cost_usd
       FROM usage_event WHERE ts BETWEEN :from AND :to
       UNION ALL
-      SELECT date(ts / 1000, 'unixepoch'), 0, 1, 0, 0, 0, 0, NULL
+      SELECT date(ts / 1000 + :tz * 60, 'unixepoch'), 0, 1, 0, 0, 0, 0, NULL
       FROM tool_call WHERE ts BETWEEN :from AND :to
     )
     GROUP BY day ORDER BY day`);
@@ -278,7 +299,26 @@ function createReads(db: DatabaseSync) {
     FROM usage_event WHERE ts BETWEEN :from AND :to
     GROUP BY model ORDER BY costUsd DESC, sum(input + output + cache_read + cache_write) DESC, model`);
 
+  const toolCounts = db.prepare(`
+    SELECT tool, count(*) AS count FROM tool_call WHERE ts BETWEEN :from AND :to AND (:session IS NULL OR session = :session)
+    GROUP BY tool ORDER BY count DESC, tool`);
+
+  // Each call with its session's directory, its agent's label, and the mod's summary of its input (null when none was sent).
+  const toolCalls = db.prepare(`
+    SELECT c.ts AS ts, c.tool AS tool, c.session AS session, c.agent AS agent, coalesce(a.label, '') AS label, s.cwd AS cwd,
+           c.detail AS detail
+    FROM tool_call c
+    LEFT JOIN agent a ON a.session = c.session AND a.agent = c.agent
+    LEFT JOIN session s ON s.id = c.session
+    WHERE c.ts BETWEEN :from AND :to AND (:session IS NULL OR c.session = :session)
+    ORDER BY c.ts DESC, c.rowid DESC
+    LIMIT :limit`);
+
   return {
+    tools: (from: number, to: number, limit: number, session: string | null) => ({
+      byTool: toolCounts.all({ from, to, session }),
+      calls: toolCalls.all({ from, to, limit, session }),
+    }),
     sessions: (limit: number) =>
       listSessions.all({ limit }).map((row) => ({ ...row, models: JSON.parse(row.models as string) as string[] })),
     sessionDetail(session: string) {
@@ -288,7 +328,7 @@ function createReads(db: DatabaseSync) {
       const { tools: _toolTotal, ...totals } = row;
       return { ...totals, agents: listAgents.all({ session }), tools: listTools.all({ session }) };
     },
-    summary: (from: number, to: number) => ({ byDay: byDay.all({ from, to }), byModel: byModel.all({ from, to }) }),
+    summary: (from: number, to: number, tz = 0) => ({ byDay: byDay.all({ from, to, tz }), byModel: byModel.all({ from, to }) }),
   };
 }
 
@@ -302,11 +342,30 @@ function sessionLimit(url: URL): number {
   return limit;
 }
 
+function toolLimit(url: URL): number {
+  const raw = url.searchParams.get('limit');
+  if (raw === null) return DEFAULT_TOOL_LIMIT;
+  const limit = /^\d+$/.test(raw) ? Number(raw) : NaN;
+  if (!(limit >= 1 && limit <= MAX_TOOL_LIMIT)) {
+    throw new HttpError(400, `limit must be an integer from 1 to ${MAX_TOOL_LIMIT}`);
+  }
+  return limit;
+}
+
 function timeParam(url: URL, name: 'from' | 'to', fallback: number): number {
   const raw = url.searchParams.get(name);
   if (raw === null) return fallback;
   if (!/^\d{1,15}$/.test(raw)) throw new HttpError(400, `${name} must be an integer, in ms since epoch`);
   return Number(raw);
+}
+
+/** Minutes east of UTC that summary days are bucketed in; UTC by default. */
+function tzParam(url: URL): number {
+  const raw = url.searchParams.get('tz');
+  if (raw === null) return 0;
+  const tz = /^-?\d{1,3}$/.test(raw) ? Number(raw) : NaN;
+  if (!(tz >= -840 && tz <= 840)) throw new HttpError(400, 'tz must be an integer from -840 to 840, in minutes east of UTC');
+  return tz;
 }
 
 // Only an origin-form target (starting with a single "/") is accepted, so "//host/x" cannot swap the host.

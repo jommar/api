@@ -43,7 +43,7 @@ export interface SessionDetail extends Omit<Session, 'tools' | 'models'> {
 }
 
 export interface DayUsage extends Totals {
-  /** UTC YYYY-MM-DD. */
+  /** YYYY-MM-DD in the requested `tz`. */
   day: string;
 }
 
@@ -54,6 +54,29 @@ export interface ModelUsage extends Omit<Totals, 'tools'> {
 export interface Summary {
   byDay: DayUsage[];
   byModel: ModelUsage[];
+}
+
+export interface ToolCall {
+  ts: number;
+  tool: string;
+  session: string;
+  /** "main" for the main thread, else the subagent id. */
+  agent: string;
+  /** '' when unknown. */
+  label: string;
+  cwd: string | null;
+  /** The mod's short, redacted summary of the call's input; null when none was sent. */
+  detail: string | null;
+}
+
+export interface Tools {
+  byTool: ToolCount[];
+  calls: ToolCall[];
+}
+
+export interface Settings {
+  /** USD per day, or null when no budget is set. */
+  dailyBudgetUsd: number | null;
 }
 
 export class ApiError extends Error {
@@ -91,10 +114,23 @@ export function fetchSession(id: string, signal?: AbortSignal): Promise<SessionD
   return get(`/api/sessions/${encodeURIComponent(id)}`, signal);
 }
 
-export function fetchSummary(range: { from?: number; to?: number }, signal?: AbortSignal): Promise<Summary> {
+export function fetchSummary(range: { from?: number; to?: number; tz?: number }, signal?: AbortSignal): Promise<Summary> {
   const params = new URLSearchParams();
   if (range.from !== undefined) params.set('from', String(range.from));
   if (range.to !== undefined) params.set('to', String(range.to));
+  if (range.tz !== undefined) params.set('tz', String(range.tz));
   const query = params.toString();
   return get(`/api/summary${query ? `?${query}` : ''}`, signal);
+}
+
+export function fetchTools(range: { session?: string; from?: number; limit?: number }, signal?: AbortSignal): Promise<Tools> {
+  const params = new URLSearchParams();
+  if (range.session !== undefined) params.set('session', range.session);
+  if (range.from !== undefined) params.set('from', String(range.from));
+  if (range.limit !== undefined) params.set('limit', String(range.limit));
+  return get(`/api/tools?${params}`, signal);
+}
+
+export function fetchSettings(signal?: AbortSignal): Promise<Settings> {
+  return get('/api/settings', signal);
 }

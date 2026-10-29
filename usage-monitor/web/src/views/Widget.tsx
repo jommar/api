@@ -1,14 +1,22 @@
 import { useEffect, useState } from 'react';
 import type { Session } from '../api';
-import { fetchSessions, fetchSummary } from '../api';
+import { fetchSessions, fetchSettings, fetchSummary, fetchTools } from '../api';
+import { RepeatChip } from '../components/RepeatChip';
 import { resizeWindow } from '../desktopWindow';
 import { formatCompact, formatDateTime, formatExact, formatUsd, shortenPath } from '../format';
+import { groupRepeats } from '../toolRuns';
 import { usePolling } from '../usePolling';
 
 /** Window sizes in logical pixels; COLLAPSED_SIZE matches the window the desktop app opens. */
-export const COLLAPSED_SIZE = [300, 124] as const;
+export const COLLAPSED_SIZE = [300, 136] as const;
 export const EXPANDED_SIZE = [340, 460] as const;
 const RECENT = 5;
+/** How often the widget checks whether the server has a newer build of this page. */
+export const BUILD_CHECK_MS = 60_000;
+const DAY_MS = 86_400_000;
+const TOOL_CALLS = 200;
+
+type View = 'compact' | 'details' | 'tools';
 
 /** Local midnight: "today" is the user's day, so the summary's UTC days are summed from here. */
 function startOfToday(now = Date.now()): number {
@@ -30,15 +38,37 @@ function Stat({ label, value, title }: { label: string; value: string; title?: s
   );
 }
 
-function MiniStat({ label, value }: { label: string; value: number }) {
-  return (
-    <div aria-label={label} title={formatExact(value)} data-tauri-drag-region className="flex flex-col">
-      <span data-tauri-drag-region className="figure text-[0.9375rem] font-semibold">
+function MiniStat({ label, value, onOpen }: { label: string; value: number; onOpen?: () => void }) {
+  const body = (
+    <>
+      <span data-tauri-drag-region={onOpen ? undefined : true} className="figure text-[0.9375rem] font-semibold">
         {formatCompact(value)}
+        {onOpen && <span aria-hidden className="ml-0.5 text-[0.6875rem] text-[var(--label-2)]">›</span>}
       </span>
-      <span data-tauri-drag-region className="text-[0.625rem] font-medium whitespace-nowrap text-[var(--label-2)]">
+      <span
+        data-tauri-drag-region={onOpen ? undefined : true}
+        className="text-[0.625rem] font-medium whitespace-nowrap text-[var(--label-2)]"
+      >
         {label.replace(' today', '')}
       </span>
+    </>
+  );
+  if (onOpen) {
+    return (
+      <button
+        type="button"
+        aria-label={`${label}: ${formatExact(value)}, show each call`}
+        title="Show each call"
+        onClick={onOpen}
+        className="-m-1 flex flex-col rounded-md p-1 text-left hover:bg-[var(--separator)]"
+      >
+        {body}
+      </button>
+    );
+  }
+  return (
+    <div aria-label={label} title={formatExact(value)} data-tauri-drag-region className="flex flex-col">
+      {body}
     </div>
   );
 }
@@ -67,20 +97,154 @@ function RecentSession({ s }: { s: Session }) {
   );
 }
 
+function IconButton({ label, title, path, onClick }: { label: string; title: string; path: string; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      aria-label={label}
+      title={title}
+      onClick={onClick}
+      onDoubleClick={(e) => e.stopPropagation()}
+      className="grid size-5 place-items-center rounded-full text-[var(--label-2)] hover:bg-[var(--separator)]"
+    >
+      <svg aria-hidden viewBox="0 0 12 12" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.6">
+        <path d={path} strokeLinecap="round" strokeLinejoin="round" />
+      </svg>
+    </button>
+  );
+}
+
+/** Every tool call since `from`: a bar per tool, then each call newest first. Only names are recorded, not arguments. */
+function ToolCalls({ from, onBack }: { from: number; onBack: () => void }) {
+  const { data } = usePolling(`widget-tools:${from}`, (signal) => fetchTools({ from, limit: TOOL_CALLS }, signal));
+  const top = data?.byTool[0]?.count ?? 0;
+  const total = data?.byTool.reduce((n, t) => n + t.count, 0) ?? 0;
+
+  return (
+    <section
+      aria-label="Tool calls"
+      data-tauri-drag-region
+      className="glass-widget flex h-screen cursor-default flex-col gap-3 px-4 py-3 select-none"
+    >
+      <div data-tauri-drag-region className="flex items-center gap-2">
+        <IconButton label="Back" title="Back to details" path="M7.5 3 4.5 6l3 3" onClick={onBack} />
+        <span data-tauri-drag-region className="text-[0.6875rem] font-semibold tracking-wide text-[var(--label-2)] uppercase">
+          Tool calls today
+        </span>
+        <span data-tauri-drag-region className="figure ml-auto text-[0.75rem] font-semibold">
+          {formatExact(total)}
+        </span>
+      </div>
+      <div className="-mx-4 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto border-t border-[var(--separator)] px-4 pt-3">
+        <ul aria-label="Calls per tool" className="flex flex-col gap-1.5">
+          {(data?.byTool ?? []).map((t) => (
+            <li key={t.tool} className="relative flex justify-between gap-3 text-[0.75rem]">
+              <span
+                aria-hidden
+                className="absolute inset-y-0 left-0 rounded-sm bg-[var(--separator)]"
+                style={{ width: `${top > 0 ? (t.count / top) * 100 : 0}%` }}
+              />
+              <span className="relative truncate pl-1.5 font-mono">{t.tool}</span>
+              <span className="figure relative pr-1 font-medium">{formatExact(t.count)}</span>
+            </li>
+          ))}
+        </ul>
+        <div className="flex flex-col gap-1">
+          <SectionTitle>{data && data.calls.length < total ? `Latest ${data.calls.length} calls` : 'Each call'}</SectionTitle>
+          <ul aria-label="Each call" className="divide-y divide-[var(--separator)]">
+            {groupRepeats(data?.calls ?? []).map(({ call: c, count }, i) => (
+              <li key={`${c.ts}:${i}`} className="flex items-baseline justify-between gap-3 py-1 text-[0.75rem]">
+                <span className="min-w-0">
+                  <span className="flex items-baseline gap-1.5">
+                    <span className="truncate font-mono">{c.tool}</span>
+                    <RepeatChip count={count} />
+                  </span>
+                  {c.detail && (
+                    <span className="block truncate font-mono text-[0.6875rem]" title={c.detail}>
+                      {c.detail}
+                    </span>
+                  )}
+                  <span className="block truncate text-[0.6875rem] text-[var(--label-2)]" title={c.cwd ?? undefined}>
+                    {c.label || c.agent} · {shortenPath(c.cwd)}
+                  </span>
+                </span>
+                <span className="figure shrink-0 text-[0.6875rem] text-[var(--label-2)]">{formatDateTime(c.ts)}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      </div>
+    </section>
+  );
+}
+
+/**
+ * The desktop window keeps one page open for days, so it would never see a dashboard update.
+ * Once a minute it reads the served index.html and reloads when that names a different script bundle.
+ */
+function useReloadOnNewBuild() {
+  useEffect(() => {
+    const running = document.querySelector('script[type="module"][src*="assets/index-"]')?.getAttribute('src');
+    if (!running) return;
+    const timer = setInterval(() => {
+      void fetch('./', { cache: 'no-store' })
+        .then((res) => res.text())
+        .then((html) => {
+          const served = /src="([^"]*assets\/index-[^"]+\.js)"/.exec(html)?.[1];
+          if (served && served !== running) window.location.reload();
+        })
+        .catch(() => {});
+    }, BUILD_CHECK_MS);
+    return () => clearInterval(timer);
+  }, []);
+}
+
+const SETTINGS_POLL_MS = 60_000;
+const BUDGET_COLOR = { ok: '#0a84ff', near: '#ff9f0a', over: '#ff453a' } as const;
+
+/** Today's cost against the daily budget: blue, orange from 80%, red past 100%. */
+function BudgetLine({ cost, budget }: { cost: number; budget: number }) {
+  const ratio = cost / budget;
+  const level = ratio > 1 ? 'over' : ratio >= 0.8 ? 'near' : 'ok';
+  return (
+    <div
+      role="meter"
+      aria-label="Daily budget"
+      aria-valuemin={0}
+      aria-valuemax={budget}
+      aria-valuenow={Math.round(cost * 100) / 100}
+      aria-valuetext={`${formatUsd(cost)} of ${formatUsd(budget)}${level === 'over' ? ', over budget' : ''}`}
+      title={`${formatUsd(cost)} of the ${formatUsd(budget)} daily budget`}
+      data-level={level}
+      data-tauri-drag-region
+      className="h-[3px] overflow-hidden rounded-full bg-[var(--separator)]"
+    >
+      <div className="h-full rounded-full" style={{ width: `${Math.min(ratio, 1) * 100}%`, background: BUDGET_COLOR[level] }} />
+    </div>
+  );
+}
+
 export function Widget() {
   const from = startOfToday();
   const summary = usePolling(`widget-summary:${from}`, (signal) => fetchSummary({ from }, signal));
   const recent = usePolling('widget-recent', (signal) => fetchSessions(RECENT, signal));
-  const [expanded, setExpanded] = useState(false);
+  const before = usePolling(`widget-yesterday:${from}`, (signal) => fetchSummary({ from: from - DAY_MS, to: from - 1 }, signal));
+  const settings = usePolling('widget-settings', (signal) => fetchSettings(signal), SETTINGS_POLL_MS);
+  const budget = settings.data?.dailyBudgetUsd ?? null;
+  useReloadOnNewBuild();
+  const [view, setView] = useState<View>('compact');
+  const expanded = view !== 'compact';
 
-  // The desktop window is transparent; only the card should show.
+  // The desktop window is transparent; only the card should show. The page always starts compact, so the
+  // window does too, even when a reload (a new build) happens while it was expanded.
   useEffect(() => {
     document.documentElement.style.background = 'transparent';
     document.body.style.background = 'transparent';
+    resizeWindow(...COLLAPSED_SIZE);
   }, []);
 
   const toggle = (next: boolean) => {
-    setExpanded(next);
+    setView(next ? 'details' : 'compact');
     const [width, height] = next ? EXPANDED_SIZE : COLLAPSED_SIZE;
     resizeWindow(width, height);
   };
@@ -92,39 +256,46 @@ export function Widget() {
   const tokens = sum((d) => d.input + d.output);
   const requests = sum((d) => d.requests);
   const session = recent.data?.[0];
+  const yesterdayPriced = (before.data?.byDay ?? []).filter((d) => d.costUsd !== null);
+  const yesterdayCost = yesterdayPriced.length > 0 ? yesterdayPriced.reduce((n, d) => n + (d.costUsd ?? 0), 0) : null;
   const offline = summary.error !== undefined && summary.data === undefined;
+
+  if (view === 'tools') return <ToolCalls from={from} onBack={() => setView('details')} />;
 
   return (
     <section
       aria-label={expanded ? 'Usage details' : 'Usage'}
       data-tauri-drag-region
       onDoubleClick={() => toggle(!expanded)}
-      className="glass-widget flex h-screen cursor-default flex-col gap-3 px-4 py-3 select-none"
+      className={`glass-widget flex h-screen cursor-default flex-col px-4 py-3 select-none ${
+        expanded ? 'gap-3' : 'gap-2 overflow-hidden'
+      }`}
     >
       <div data-tauri-drag-region className="flex items-center justify-between">
         <span data-tauri-drag-region className="text-[0.6875rem] font-semibold tracking-wide text-[var(--label-2)] uppercase">
           Today
         </span>
         <span className="flex items-center gap-2">
-          {offline && (
+          {offline ? (
             <span className="flex items-center gap-1 text-[0.6875rem] font-medium text-[#ff453a]">
               <span aria-hidden className="size-1.5 rounded-full bg-current" />
               API offline
             </span>
+          ) : (
+            before.data && (
+              <span aria-label="Cost yesterday" data-tauri-drag-region className="text-[0.6875rem] font-medium text-[var(--label-2)]">
+                {before.data.byDay.length === 0 ? (
+                  'Nothing yesterday'
+                ) : (
+                  <>
+                    Yesterday <span className="figure">{formatUsd(yesterdayCost)}</span>
+                  </>
+                )}
+              </span>
+            )
           )}
           {expanded && (
-            <button
-              type="button"
-              aria-label="Collapse"
-              title="Collapse (or double-click)"
-              onClick={() => toggle(false)}
-              onDoubleClick={(e) => e.stopPropagation()}
-              className="grid size-5 place-items-center rounded-full text-[var(--label-2)] hover:bg-[var(--separator)]"
-            >
-              <svg aria-hidden viewBox="0 0 12 12" className="size-3" fill="none" stroke="currentColor" strokeWidth="1.6">
-                <path d="M3 7.5 6 4.5l3 3" strokeLinecap="round" strokeLinejoin="round" />
-              </svg>
-            </button>
+            <IconButton label="Collapse" title="Collapse (or double-click)" path="M3 7.5 6 4.5l3 3" onClick={() => toggle(false)} />
           )}
         </span>
       </div>
@@ -133,12 +304,15 @@ export function Widget() {
         <Stat label="Tokens today" value={formatCompact(tokens)} title={formatExact(tokens)} />
         <Stat label="Requests today" value={formatCompact(requests)} title={formatExact(requests)} />
       </div>
+      {budget !== null && <BudgetLine cost={cost ?? 0} budget={budget} />}
 
       {!expanded && session && (
         <div
           aria-label="Latest session"
           data-tauri-drag-region
-          className="mt-auto flex justify-between gap-3 border-t border-[var(--separator)] pt-2 text-[0.75rem] text-[var(--label-2)]"
+          className={`mt-auto flex justify-between gap-3 text-[0.75rem] text-[var(--label-2)] ${
+            budget === null ? 'border-t border-[var(--separator)] pt-2' : ''
+          }`}
         >
           <span data-tauri-drag-region className="truncate">
             {session.models[0] ?? '—'}
@@ -156,7 +330,7 @@ export function Widget() {
             <MiniStat label="Output today" value={sum((d) => d.output)} />
             <MiniStat label="Cache read today" value={sum((d) => d.cacheRead)} />
             <MiniStat label="Cache write today" value={sum((d) => d.cacheWrite)} />
-            <MiniStat label="Tools today" value={sum((d) => d.tools)} />
+            <MiniStat label="Tools today" value={sum((d) => d.tools)} onOpen={() => setView('tools')} />
           </div>
 
           <div className="flex flex-col gap-1">

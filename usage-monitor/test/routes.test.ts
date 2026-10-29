@@ -6,7 +6,7 @@ import path from 'node:path';
 import { describe, test } from 'node:test';
 import type { DatabaseSync } from 'node:sqlite';
 import { openDb } from '../src/db.ts';
-import { createHandler, SESSION_DETAIL_SQL, SESSION_LIST_SQL } from '../src/routes.ts';
+import { createHandler, SESSION_DETAIL_SQL, SESSION_LIST_SQL, type HandlerOptions } from '../src/routes.ts';
 
 const HOUR = 3_600_000;
 const DAY1 = Date.UTC(2026, 0, 1);
@@ -27,12 +27,12 @@ type Service = {
 
 // ---- Harness: a real server on a Unix socket in a temp dir, an in-memory database ----------------
 
-async function withService(run: (service: Service) => Promise<void>): Promise<void> {
+async function withService(run: (service: Service) => Promise<void>, options: HandlerOptions = {}): Promise<void> {
   const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'usage-monitor-http-'));
   const socket = path.join(scratch, 's.sock');
   const distDir = path.join(scratch, 'dist'); // created by the tests that need a built dashboard
   const db = openDb(':memory:');
-  const server = http.createServer(createHandler(db, { distDir }));
+  const server = http.createServer(createHandler(db, { distDir, ...options }));
   const agent = new http.Agent({ keepAlive: true });
   await new Promise<void>((resolve) => server.listen(socket, resolve));
 
@@ -89,8 +89,8 @@ const usage = (sessionId: string, agent: string, model: string, ts: number, toke
   id: id(), v: 1, type: 'usage', session: sessionId, ts, agent, model,
   input: tokens[0], output: tokens[1], cacheRead: tokens[2], cacheWrite: tokens[3], costUsd, ...over,
 });
-const tool = (sessionId: string, agent: string, name: string, ts: number): Raw => ({
-  id: id(), v: 1, type: 'tool', session: sessionId, ts, agent, tool: name,
+const tool = (sessionId: string, agent: string, name: string, ts: number, detail?: string): Raw => ({
+  id: id(), v: 1, type: 'tool', session: sessionId, ts, agent, tool: name, ...(detail === undefined ? {} : { detail }),
 });
 const agentEvent = (sessionId: string, agent: string, ts: number, label: string, model?: string): Raw => ({
   id: id(), v: 1, type: 'agent', session: sessionId, ts, agent, label, ...(model === undefined ? {} : { model }),
@@ -466,6 +466,71 @@ describe('read routes', () => {
         ],
       });
     }));
+
+  test('GET /api/summary buckets days in the tz offset, in minutes east of UTC', () =>
+    withService(async (service) => {
+      await service.post(fixtureEvents());
+      // UTC-12: 01-01 11:00 falls on 12-31; 12:00 and the 01-02 requests fall on 01-01
+      const west = (await service.get('/api/summary?tz=-720')).json;
+      assert.deepEqual(west.byDay.map((row: Raw) => [row.day, row.requests]).slice(0, 2), [['2025-12-31', 1], ['2026-01-01', 3]]);
+      for (const bad of ['1.5', 'x', '841', '-841']) {
+        const reply = await service.get(`/api/summary?tz=${bad}`);
+        assert.equal(reply.status, 400, bad);
+      }
+    }));
+
+  test('GET /api/tools counts calls per tool and lists each call newest first, with its session and agent', () =>
+    withService(async (service) => {
+      await service.post(fixtureEvents());
+      const reply = await service.get('/api/tools');
+      assert.equal(reply.status, 200);
+      // Bash 2, Read 2, Edit 2 (sess-a Edit + sess-b Edit): ties by name
+      assert.deepEqual(reply.json.byTool, [
+        { tool: 'Bash', count: 2 }, { tool: 'Edit', count: 2 }, { tool: 'Read', count: 2 },
+      ]);
+      assert.equal(reply.json.calls.length, 6);
+      assert.deepEqual(reply.json.calls[0], {
+        ts: DAY2 + 5 * HOUR, tool: 'Edit', session: 'sess-b', agent: 'main', label: '', cwd: null, detail: null,
+      });
+      assert.deepEqual(reply.json.calls[1], {
+        ts: DAY2 + HOUR, tool: 'Read', session: 'sess-a', agent: 'sub-1', label: 'explore', cwd: '/work/a', detail: null,
+      });
+    }));
+
+  test('GET /api/tools returns the detail a tool event was sent with', () =>
+    withService(async (service) => {
+      await service.post([tool('s', 'main', 'Bash', DAY1, 'npm test')]);
+      assert.equal((await service.get('/api/tools')).json.calls[0].detail, 'npm test');
+    }));
+
+  test('GET /api/tools?session= keeps one session\'s calls and counts', () =>
+    withService(async (service) => {
+      await service.post(fixtureEvents());
+      const b = (await service.get('/api/tools?session=sess-b')).json;
+      assert.deepEqual(b.byTool, [{ tool: 'Edit', count: 1 }]);
+      assert.deepEqual(b.calls.map((c: Raw) => c.session), ['sess-b']);
+      assert.deepEqual((await service.get('/api/tools?session=nope')).json, { byTool: [], calls: [] });
+    }));
+
+  test('GET /api/tools bounds by from/to and caps the call list with limit', () =>
+    withService(async (service) => {
+      await service.post(fixtureEvents());
+      const day2 = (await service.get(`/api/tools?from=${DAY2}`)).json;
+      assert.deepEqual(day2.byTool, [{ tool: 'Edit', count: 1 }, { tool: 'Read', count: 1 }]);
+      const capped = (await service.get('/api/tools?limit=2')).json;
+      assert.equal(capped.calls.length, 2);
+      assert.equal(capped.byTool.length, 3); // the counts are not capped
+      assert.equal((await service.get('/api/tools?limit=0')).status, 400);
+    }));
+
+  test('GET /api/settings reports the daily budget, or null when none is set', async () => {
+    await withService(async (service) => {
+      assert.deepEqual((await service.get('/api/settings')).json, { dailyBudgetUsd: 20 });
+    }, { dailyBudgetUsd: 20 });
+    await withService(async (service) => {
+      assert.deepEqual((await service.get('/api/settings')).json, { dailyBudgetUsd: null });
+    }, { dailyBudgetUsd: null });
+  });
 
   test('GET /api/summary on an empty database has empty lists', () =>
     withService(async (service) => {

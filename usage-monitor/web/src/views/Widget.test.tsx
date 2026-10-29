@@ -1,9 +1,9 @@
-import { fireEvent, screen, waitFor, within } from '@testing-library/react';
+import { cleanup, fireEvent, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import { T0, sessions } from '../test/fixtures';
 import { calledUrls, renderWithTheme, stubApi } from '../test/utils';
 import { resizeWindow } from '../desktopWindow';
-import { COLLAPSED_SIZE, EXPANDED_SIZE, Widget } from './Widget';
+import { BUILD_CHECK_MS, COLLAPSED_SIZE, EXPANDED_SIZE, Widget } from './Widget';
 
 vi.mock('../desktopWindow', () => ({ resizeWindow: vi.fn() }));
 
@@ -18,7 +18,26 @@ const today = {
   ],
 };
 
+const tools = {
+  byTool: [
+    { tool: 'Bash', count: 7 },
+    { tool: 'Read', count: 3 },
+  ],
+  calls: [
+    { ts: T0, tool: 'Bash', session: 'sess-newest', agent: 'main', label: '', cwd: '/home/dev/projects/alpha/api/usage-monitor', detail: 'npm test' },
+    { ts: T0 - 60_000, tool: 'Read', session: 'sess-newest', agent: 'a1', label: 'Explore: find routes', cwd: '/tmp/scratch', detail: null },
+  ],
+};
+
+const yesterday = {
+  byDay: [{ day: '2026-10-27', requests: 9, tools: 3, input: 10, output: 10, cacheRead: 0, cacheWrite: 0, costUsd: 4.2 }],
+  byModel: [],
+};
+
 function api(url: string) {
+  if (url === '/api/settings') return { body: { dailyBudgetUsd: 20 } };
+  if (url.startsWith('/api/summary') && url.includes('&to=')) return { body: yesterday };
+  if (url.startsWith('/api/tools')) return { body: tools };
   if (url.startsWith('/api/summary')) return { body: today };
   if (url.startsWith('/api/sessions')) return { body: sessions };
   return { status: 404 };
@@ -109,4 +128,131 @@ describe('Widget', () => {
     expect(screen.queryByRole('region', { name: 'Usage details' })).not.toBeInTheDocument();
     expect(screen.getByLabelText('Cost today')).toBeInTheDocument();
   });
+
+  it('opens every tool call from the Tools figure in the expanded view, and goes back', async () => {
+    const fetchMock = stubApi(api);
+    renderWithTheme(<Widget />);
+    fireEvent.doubleClick(await screen.findByRole('region', { name: 'Usage' }));
+    expect(calledUrls(fetchMock).some((u) => u.startsWith('/api/tools'))).toBe(false); // only fetched when opened
+
+    fireEvent.click(await screen.findByRole('button', { name: /Tools today/ }));
+    const view = await screen.findByRole('region', { name: 'Tool calls' });
+
+    const byTool = within(view).getByRole('list', { name: 'Calls per tool' });
+    expect(within(byTool).getAllByRole('listitem').map((li) => li.textContent)).toEqual(['Bash7', 'Read3']);
+
+    const calls = await within(view).findByRole('list', { name: 'Each call' });
+    const [first, second] = within(calls).getAllByRole('listitem') as [HTMLElement, HTMLElement];
+    expect(first).toHaveTextContent('Bash');
+    expect(first).toHaveTextContent('main');
+    expect(within(first).getByTitle('npm test')).toHaveTextContent('npm test');
+    expect(second).toHaveTextContent('Explore: find routes');
+    expect(second).toHaveTextContent('/tmp/scratch');
+
+    fireEvent.click(within(view).getByRole('button', { name: 'Back' }));
+    expect(await screen.findByRole('region', { name: 'Usage details' })).toBeInTheDocument();
+  });
+
+  it('a double-click in the tool calls view does not collapse the widget', async () => {
+    stubApi(api);
+    renderWithTheme(<Widget />);
+    fireEvent.doubleClick(await screen.findByRole('region', { name: 'Usage' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Tools today/ }));
+    fireEvent.doubleClick(await screen.findByRole('region', { name: 'Tool calls' }));
+    expect(screen.getByRole('region', { name: 'Tool calls' })).toBeInTheDocument();
+  });
+
+  it('folds repeated calls in the tool calls view into one row with a count', async () => {
+    const same = { ts: T0, tool: 'Read', session: 's', agent: 'main', label: '', cwd: '/w', detail: 'config.toml' };
+    stubApi((url) =>
+      url.startsWith('/api/tools')
+        ? { body: { byTool: [{ tool: 'Read', count: 4 }], calls: [same, { ...same, ts: T0 - 1 }, { ...same, ts: T0 - 2 }, { ...same, ts: T0 - 3 }] } }
+        : api(url),
+    );
+    renderWithTheme(<Widget />);
+    fireEvent.doubleClick(await screen.findByRole('region', { name: 'Usage' }));
+    fireEvent.click(await screen.findByRole('button', { name: /Tools today/ }));
+    const calls = await screen.findByRole('list', { name: 'Each call' });
+    await waitFor(() => expect(within(calls).getAllByRole('listitem')).toHaveLength(1));
+    expect(within(calls).getByLabelText('Repeated 4 times')).toHaveTextContent('×4');
+  });
+
+  it("shows yesterday's cost beside today's for a reference point", async () => {
+    vi.useFakeTimers({ now: T0, toFake: ['Date'] });
+    const fetchMock = stubApi(api);
+    renderWithTheme(<Widget />);
+    expect(await screen.findByLabelText('Cost yesterday')).toHaveTextContent('Yesterday $4.20');
+    const midnight = new Date(T0);
+    midnight.setHours(0, 0, 0, 0);
+    expect(calledUrls(fetchMock)).toContain(`/api/summary?from=${midnight.getTime() - 86_400_000}&to=${midnight.getTime() - 1}`);
+  });
+
+  it('sizes the window for the compact card when it loads, so a reload never leaves an expanded window behind', async () => {
+    stubApi(api);
+    renderWithTheme(<Widget />);
+    await screen.findByRole('region', { name: 'Usage' });
+    expect(resizeWindow).toHaveBeenCalledWith(...COLLAPSED_SIZE);
+  });
+
+  it('says "Nothing yesterday" rather than a dash when yesterday has no usage', async () => {
+    stubApi((url) => (url.includes('&to=') ? { body: { byDay: [], byModel: [] } } : api(url)));
+    renderWithTheme(<Widget />);
+    expect(await screen.findByLabelText('Cost yesterday')).toHaveTextContent(/^Nothing yesterday$/);
+  });
+
+  it('reloads itself when the server starts serving a new build', async () => {
+    const reload = vi.fn();
+    vi.stubGlobal('location', { ...window.location, reload });
+    document.head.insertAdjacentHTML('beforeend', '<script type="module" src="./assets/index-OLD.js" data-test></script>');
+    let html = '<script type="module" crossorigin src="./assets/index-OLD.js"></script>';
+    vi.stubGlobal(
+      'fetch',
+      vi.fn(async (input: RequestInfo | URL) => {
+        const url = String(input);
+        if (url === './') return { ok: true, status: 200, text: async () => html } as Response;
+        const reply = api(url);
+        return { ok: true, status: 200, json: async () => reply.body } as Response;
+      }),
+    );
+    vi.useFakeTimers({ toFake: ['setInterval', 'clearInterval'] });
+    renderWithTheme(<Widget />);
+
+    await vi.advanceTimersByTimeAsync(BUILD_CHECK_MS);
+    expect(reload).not.toHaveBeenCalled();
+
+    html = '<script type="module" crossorigin src="./assets/index-NEW.js"></script>';
+    await vi.advanceTimersByTimeAsync(BUILD_CHECK_MS);
+    expect(reload).toHaveBeenCalledTimes(1);
+    document.querySelector('script[data-test]')?.remove();
+  });
+
+  it("shows today's cost against the daily budget as a thin progress line", async () => {
+    stubApi(api);
+    renderWithTheme(<Widget />);
+    const budget = await screen.findByRole('meter', { name: 'Daily budget' });
+    expect(budget).toHaveAttribute('aria-valuenow', '1.75');
+    expect(budget).toHaveAttribute('aria-valuemax', '20');
+    expect(budget).toHaveAttribute('aria-valuetext', '$1.75 of $20.00');
+    expect(budget).toHaveAttribute('data-level', 'ok');
+  });
+
+  it('marks the budget line as near from 80% and over past 100%', async () => {
+    stubApi((url) => (url === '/api/settings' ? { body: { dailyBudgetUsd: 2 } } : api(url)));
+    renderWithTheme(<Widget />);
+    expect(await screen.findByRole('meter', { name: 'Daily budget' })).toHaveAttribute('data-level', 'near'); // 1.75 of 2
+    cleanup();
+    stubApi((url) => (url === '/api/settings' ? { body: { dailyBudgetUsd: 1.5 } } : api(url)));
+    renderWithTheme(<Widget />);
+    const over = await screen.findByRole('meter', { name: 'Daily budget' });
+    expect(over).toHaveAttribute('data-level', 'over');
+    expect(over).toHaveAttribute('aria-valuetext', '$1.75 of $1.50, over budget');
+  });
+
+  it('shows no budget line when no budget is set', async () => {
+    stubApi((url) => (url === '/api/settings' ? { body: { dailyBudgetUsd: null } } : api(url)));
+    renderWithTheme(<Widget />);
+    await screen.findByLabelText('Cost today');
+    await waitFor(() => expect(screen.queryByRole('meter')).not.toBeInTheDocument());
+  });
 });
+
